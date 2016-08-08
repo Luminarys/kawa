@@ -1,9 +1,13 @@
 extern crate shout;
 extern crate ffmpeg;
 extern crate libc;
+extern crate hyper;
+extern crate toml;
 
 mod radio;
 mod transcode;
+mod config;
+mod api;
 
 use std::env;
 
@@ -20,13 +24,13 @@ fn main() {
     f.read_to_end(&mut in_buf).unwrap();
     let in_buf = Arc::new(in_buf);
 
-    let radio_endpoints = vec![("/test.ogg".to_owned(), shout::ShoutFormat::Ogg), ("/test.mp3".to_owned(), shout::ShoutFormat::MP3)];
+    let radio_endpoints = vec![("/test.flac".to_owned(), shout::ShoutFormat::Ogg), ("/test.mp3".to_owned(), shout::ShoutFormat::MP3)];
     let buffers = start_shout_conns("radio.stew.moe".to_owned(), 8000, "source".to_owned(), "bDXsHJq9s2BvjWKeH5iO".to_owned(), radio_endpoints.clone());
     let mut handles = Vec::new();
     for (fmt, buffer) in buffers {
         match fmt {
             shout::ShoutFormat::Ogg => {
-                let h = transcode::transcode(in_buf.clone(), ext.to_str().unwrap(), buffer.clone(), "ogg", ffmpeg::codec::id::Id::VORBIS).unwrap();
+                let h = transcode::transcode(in_buf.clone(), ext.to_str().unwrap(), buffer.clone(), "ogg", ffmpeg::codec::id::Id::FLAC).unwrap();
                 handles.push(h);
             }
             shout::ShoutFormat::MP3 => {
@@ -39,16 +43,12 @@ fn main() {
         }
     }
 
-    for handle in handles {
-        handle.join();
-    }
     loop {
         thread::sleep(std::time::Duration::new(1, 0));
     }
 }
 
 fn start_shout_conns(host: String, port: u16, user: String, password: String, endpoints: Vec<(String, shout::ShoutFormat)>) -> Vec<(shout::ShoutFormat, Arc<Mutex<Vec<u8>>>)> {
-    // TODO: Get the handles from this.
     endpoints.into_iter().map(|(mount, format)| {
         let out_buf = Arc::new(Mutex::new(Vec::new()));
         let bc = out_buf.clone();

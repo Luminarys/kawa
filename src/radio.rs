@@ -1,4 +1,6 @@
 use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::Duration;
 use shout;
 
 pub fn play(conn: shout::ShoutConn, buffer: Arc<Mutex<Vec<u8>>>) {
@@ -11,7 +13,11 @@ pub fn play(conn: shout::ShoutConn, buffer: Arc<Mutex<Vec<u8>>>) {
             conn.sync();
         } else {
             conn.send(data.drain(..).collect());
-            conn.sync();
+            if conn.delay() == 0 {
+                thread::sleep(Duration::from_millis(100));
+            } else {
+                conn.sync();
+            }
         }
     }
 }

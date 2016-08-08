@@ -1,0 +1,50 @@
+use toml;
+use ffmpeg::codec;
+use shout::ShoutFormat;
+use hyper::Url;
+
+pub struct Config {
+    pub streams: Vec<StreamConfig>,
+    pub radio: RadioConfig,
+    pub api: ApiConfig,
+}
+
+pub struct StreamConfig {
+    pub mount: String,
+    pub bitrate: Option<usize>,
+    pub container: ShoutFormat,
+    pub codec: codec::id::Id,
+}
+
+pub struct RadioConfig {
+    pub host: String,
+    pub port: u16,
+    pub user: String,
+    pub password: String,
+}
+
+pub struct ApiConfig {
+    pub port: u16,
+    pub remote_random: Url,
+}
+
+pub fn parse_config(input: String) -> Result<Config, String> {
+    let mut parser = toml::Parser::new(&input);
+    let toml = match parser.parse() {
+        Some(toml) => toml,
+        None => {
+            for err in &parser.errors {
+                let (loline, locol) = parser.to_linecol(err.lo);
+                let (hiline, hicol) = parser.to_linecol(err.hi);
+                return Err(format!("{}:{}:{}-{}:{} error: {}",
+                         filename,
+                         loline,
+                         locol,
+                         hiline,
+                         hicol,
+                         err.desc));
+            }
+            return Err(format!("Unknown error parsing config!"))
+        }
+    };
+}
