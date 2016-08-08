@@ -1,0 +1,12 @@
+[package]
+name = "kawa"
+version = "0.1.0"
+authors = ["Luminarys <postmaster@gensok.io>"]
+
+[dependencies]
+shout = "0.1.3"
+libc = "0.2"
+
+[dependencies.ffmpeg]
+version = "0.2.0-alpha.5"
+git = "https://github.com/luminarys/rust-ffmpeg"
