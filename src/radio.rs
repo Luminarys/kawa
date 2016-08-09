@@ -34,7 +34,10 @@ pub fn start_streams(radio_cfg: RadioConfig,
         let mut buffers = Vec::new();
         if let Some(ref qe) = queue.entries.pop() {
             let ref path = qe.path;
-            let mut f = File::open(&path).expect("invalid file");
+            let mut f = match File::open(&path) {
+                Ok(f) => f,
+                Err(_) => break,
+            };
             let mut in_buf = Vec::new();
             let ext = Path::new(&path).extension().unwrap();
             f.read_to_end(&mut in_buf).unwrap();
@@ -76,14 +79,9 @@ pub fn start_streams(radio_cfg: RadioConfig,
             drop(queue);
             loop {
                 if buffers.iter().all(|buffer| buffer.lock().unwrap().is_empty()) {
-                    println!("All buffers flushed!");
-                    for token in cancel_tokens.iter() {
-                        token.store(true, Ordering::SeqCst);
-                    }
                     break;
                 } else {
                     if let Ok(msg) = updates.try_recv() {
-                        println!("Received chan message!");
                         match msg {
                             ApiMessage::Skip => {
                                 println!("Skipping!");

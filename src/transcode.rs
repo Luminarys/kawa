@@ -34,7 +34,6 @@ pub fn transcode(in_data: Arc<Vec<u8>>,
     let mut octx = format::open_custom_io(io_octx, false, oct).unwrap().output();
 
     let mut transcoder = transcoder(&mut ictx, &mut octx, format, &filter, bitrate).unwrap();
-    let oct = oct.to_owned();
     let tok = thread::spawn(move || {
         octx.set_metadata(ictx.metadata().to_owned());
         octx.write_header().unwrap();
@@ -98,8 +97,6 @@ pub fn transcode(in_data: Arc<Vec<u8>>,
         }
         if let Ok(()) = octx.write_trailer() {
         };
-
-        println!("Transcoding over for oct {:?}", oct);
     });
     Ok(tok)
 }

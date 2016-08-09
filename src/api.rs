@@ -22,7 +22,7 @@ impl Handler for StreamerApi {
         match context.uri.as_utf8_path() {
             Some("/queue") => {
                 let q = self.queue.lock().unwrap();
-                if let Ok(resp) = json::encode(&*q) {
+                if let Ok(resp) = json::encode(&q.entries) {
                     response.send(resp);
                 }
             }
