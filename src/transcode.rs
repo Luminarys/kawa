@@ -8,13 +8,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 
 pub fn transcode(in_data: Arc<Vec<u8>>,
-             ict: &str,
-             out_data: Arc<Mutex<Vec<u8>>>,
-             oct: &str,
-             format: codec::id::Id,
-             bitrate: Option<usize>,
-             cancel: Arc<AtomicBool>)
-             -> Result<thread::JoinHandle<()>, ffmpeg::Error> {
+                 ict: &str,
+                 out_data: Arc<Mutex<Vec<u8>>>,
+                 oct: &str,
+                 format: codec::id::Id,
+                 bitrate: Option<usize>,
+                 cancel: Arc<AtomicBool>)
+                 -> Result<thread::JoinHandle<()>, ffmpeg::Error> {
     let filter = "anull".to_owned();
 
     let io_ictx = format::io::Context::new(4096,
@@ -27,13 +27,14 @@ pub fn transcode(in_data: Arc<Vec<u8>>,
 
     let io_octx = format::io::Context::new(4096,
                                            true,
-                                           (out_data, cancel),
+                                           (out_data.clone(), cancel.clone()),
                                            None,
                                            Some(write_packet),
                                            None);
     let mut octx = format::open_custom_io(io_octx, false, oct).unwrap().output();
 
     let mut transcoder = transcoder(&mut ictx, &mut octx, format, &filter, bitrate).unwrap();
+    let oct = oct.to_owned();
     let tok = thread::spawn(move || {
         octx.set_metadata(ictx.metadata().to_owned());
         octx.write_header().unwrap();
@@ -43,7 +44,8 @@ pub fn transcode(in_data: Arc<Vec<u8>>,
 
         let mut decoded = frame::Audio::empty();
         let mut encoded = ffmpeg::Packet::empty();
-        for (stream, mut packet) in ictx.packets() {
+        let mut err = false;
+        'outer: for (stream, mut packet) in ictx.packets() {
             if stream.index() == transcoder.stream {
                 packet.rescale_ts(stream.time_base(), in_time_base);
 
@@ -61,31 +63,43 @@ pub fn transcode(in_data: Arc<Vec<u8>>,
                         if let Ok(true) = transcoder.encoder.encode(&decoded, &mut encoded) {
                             encoded.set_stream(0);
                             encoded.rescale_ts(in_time_base, out_time_base);
-                            encoded.write_interleaved(&mut octx).unwrap();
+                            if let Err(_) = encoded.write_interleaved(&mut octx) {
+                                err = true;
+                                break 'outer;
+                            }
                         }
                     }
                 }
             }
         }
 
-        transcoder.filter.get("in").unwrap().source().flush().unwrap();
+        if !err {
+            transcoder.filter.get("in").unwrap().source().flush().unwrap();
 
-        while let Ok(..) = transcoder.filter.get("out").unwrap().sink().frame(&mut decoded) {
-            if let Ok(true) = transcoder.encoder.encode(&decoded, &mut encoded) {
-                encoded.set_stream(0);
-                encoded.rescale_ts(in_time_base, out_time_base);
-                encoded.write_interleaved(&mut octx).unwrap();
+            while let Ok(..) = transcoder.filter.get("out").unwrap().sink().frame(&mut decoded) {
+                if let Ok(true) = transcoder.encoder.encode(&decoded, &mut encoded) {
+                    encoded.set_stream(0);
+                    encoded.rescale_ts(in_time_base, out_time_base);
+                    if let Err(_) = encoded.write_interleaved(&mut octx) {
+                        err = true;
+                        break;
+                    }
+                }
             }
         }
+        if !err {
+            if let Ok(true) = transcoder.encoder.flush(&mut encoded) {
+                encoded.set_stream(0);
+                encoded.rescale_ts(in_time_base, out_time_base);
+                if let Err(_) = encoded.write_interleaved(&mut octx) {
+                }
+            }
 
-        if let Ok(true) = transcoder.encoder.flush(&mut encoded) {
-            encoded.set_stream(0);
-            encoded.rescale_ts(in_time_base, out_time_base);
-            encoded.write_interleaved(&mut octx).unwrap();
         }
-
         if let Ok(()) = octx.write_trailer() {
         };
+
+        println!("Transcoding over for oct {:?}", oct);
     });
     Ok(tok)
 }
@@ -166,13 +180,13 @@ macro_rules! rw_callback {
     };
 }
 
-fn write_to_buf(&(ref output, ref cancel): &(Arc<Mutex<Vec<u8>>>, Arc<AtomicBool>), buffer: &[u8]) -> i32 {
+fn write_to_buf(&(ref output, ref cancel): &(Arc<Mutex<Vec<u8>>>, Arc<AtomicBool>),
+                buffer: &[u8])
+                -> i32 {
     let mut data = output.lock().unwrap();
     if cancel.load(Ordering::SeqCst) {
-        println!("Skipping tc!");
         data.clear();
         return ffmpeg::sys::AVERROR_EXIT;
-    } else {
     }
     data.write(buffer).unwrap() as i32
 }
@@ -197,9 +211,12 @@ fn read_buf(&mut (ref mut pos, ref input): &mut (usize, Arc<Vec<u8>>),
 
 rw_callback!(read_packet, read_buf, (usize, Arc<Vec<u8>>));
 
-fn seek_buf(&mut (ref mut pos, ref input): &mut (usize, Arc<Vec<u8>>), offset: i64, whence: i32) -> i64 {
+fn seek_buf(&mut (ref mut pos, ref input): &mut (usize, Arc<Vec<u8>>),
+            offset: i64,
+            whence: i32)
+            -> i64 {
     if whence == ffmpeg::sys::AVSEEK_SIZE {
-        return input.len() as i64
+        return input.len() as i64;
     }
     *pos = offset as usize;
     return offset;

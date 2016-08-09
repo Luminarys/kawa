@@ -1,5 +1,5 @@
 use std::sync::{Arc, Mutex};
-use std::sync::mpsc::Receiver;
+use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 use std::time::Duration;
 use std::io::Read;
@@ -8,7 +8,7 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use shout;
-use queue::Queue;
+use queue::{Queue, QueueEntry};
 use api::ApiMessage;
 use config::{RadioConfig, StreamConfig};
 use transcode;
@@ -17,20 +17,21 @@ pub fn start_streams(radio_cfg: RadioConfig,
                      stream_cfgs: Vec<StreamConfig>,
                      queue: Arc<Mutex<Queue>>,
                      updates: Receiver<ApiMessage>) {
-    let buffers: Vec<_> = stream_cfgs.iter()
-        .map(|stream| {
-            start_shout_conn(radio_cfg.host.clone(),
-                             radio_cfg.port,
-                             radio_cfg.user.clone(),
-                             radio_cfg.password.clone(),
-                             stream.mount.clone(),
-                             stream.container.clone())
-        })
-        .collect();
+    let buf_chans: Vec<_> = stream_cfgs.iter()
+                                     .map(|stream| {
+                                         start_shout_conn(radio_cfg.host.clone(),
+                                                          radio_cfg.port,
+                                                          radio_cfg.user.clone(),
+                                                          radio_cfg.password.clone(),
+                                                          stream.mount.clone(),
+                                                          stream.container.clone())
+                                     })
+                                     .collect();
 
     loop {
         let mut queue = queue.lock().unwrap();
         let mut cancel_tokens = Vec::new();
+        let mut buffers = Vec::new();
         if let Some(ref qe) = queue.entries.pop() {
             let ref path = qe.path;
             let mut f = File::open(&path).expect("invalid file");
@@ -39,29 +40,34 @@ pub fn start_streams(radio_cfg: RadioConfig,
             f.read_to_end(&mut in_buf).unwrap();
             let in_buf = Arc::new(in_buf);
 
-            for (stream, buffer) in stream_cfgs.iter().zip(buffers.iter()) {
+            for (stream, chan) in stream_cfgs.iter().zip(buf_chans.iter()) {
                 let token = Arc::new(AtomicBool::new(false));
+                let out_buf = Arc::new(Mutex::new(Vec::new()));
                 match stream.container {
                     shout::ShoutFormat::Ogg => {
                         transcode::transcode(in_buf.clone(),
                                              ext.to_str().unwrap(),
-                                             buffer.clone(),
+                                             out_buf.clone(),
                                              "ogg",
                                              stream.codec,
                                              stream.bitrate,
                                              token.clone())
                             .unwrap();
+                        buffers.push(out_buf.clone());
+                        chan.send(out_buf).unwrap();
                         cancel_tokens.push(token);
                     }
                     shout::ShoutFormat::MP3 => {
                         transcode::transcode(in_buf.clone(),
                                              ext.to_str().unwrap(),
-                                             buffer.clone(),
+                                             out_buf.clone(),
                                              "mp3",
                                              stream.codec,
                                              stream.bitrate,
                                              token.clone())
                             .unwrap();
+                        buffers.push(out_buf.clone());
+                        chan.send(out_buf).unwrap();
                         cancel_tokens.push(token);
                     }
                     _ => {}
@@ -69,8 +75,11 @@ pub fn start_streams(radio_cfg: RadioConfig,
             }
             drop(queue);
             loop {
-                if buffers.iter().all(|buffer| buffer.lock().unwrap().len() == 0) {
+                if buffers.iter().all(|buffer| buffer.lock().unwrap().is_empty()) {
                     println!("All buffers flushed!");
+                    for token in cancel_tokens.iter() {
+                        token.store(true, Ordering::SeqCst);
+                    }
                     break;
                 } else {
                     if let Ok(msg) = updates.try_recv() {
@@ -80,7 +89,6 @@ pub fn start_streams(radio_cfg: RadioConfig,
                                 println!("Skipping!");
                                 for token in cancel_tokens.iter() {
                                     token.store(true, Ordering::SeqCst);
-                                    assert!(token.load(Ordering::SeqCst), true);
                                 }
                                 break;
                             }
@@ -91,25 +99,33 @@ pub fn start_streams(radio_cfg: RadioConfig,
                 }
             }
         } else {
-            drop(queue);
             println!("Autoqueing!");
+            queue.entries.push(QueueEntry::new("".to_owned(), "/tmp/in.mp3".to_owned()));
+            drop(queue);
             thread::sleep(Duration::from_millis(1000));
         }
     }
 }
 
-pub fn play(conn: shout::ShoutConn, buffer: Arc<Mutex<Vec<u8>>>) {
+pub fn play(conn: shout::ShoutConn, buffer_rec: Receiver<Arc<Mutex<Vec<u8>>>>) {
     let step = 4096;
+    let mut buffer = buffer_rec.recv().unwrap();
     loop {
+        if let Ok(b) = buffer_rec.try_recv() {
+            buffer = b;
+        }
+
         let mut data = buffer.lock().unwrap();
         if step < data.len() {
             conn.send(data.drain(0..step).collect());
             drop(data);
             conn.sync();
         } else if data.len() == 0 {
+            drop(data);
             thread::sleep(Duration::from_millis(100));
         } else {
             conn.send(data.drain(..).collect());
+            drop(data);
             conn.sync();
         }
     }
@@ -121,21 +137,21 @@ fn start_shout_conn(host: String,
                     password: String,
                     mount: String,
                     format: shout::ShoutFormat)
-                    -> Arc<Mutex<Vec<u8>>> {
-    let out_buf = Arc::new(Mutex::new(Vec::new()));
-    let bc = out_buf.clone();
+                    -> Sender<Arc<Mutex<Vec<u8>>>> {
+    let (tx, rx) = mpsc::channel();
+
     thread::spawn(move || {
         let conn = shout::ShoutConnBuilder::new()
-            .host(host)
-            .port(port)
-            .user(user)
-            .password(password)
-            .mount(mount)
-            .protocol(shout::ShoutProtocol::HTTP)
-            .format(format)
-            .build()
-            .unwrap();
-        play(conn, bc);
+                       .host(host)
+                       .port(port)
+                       .user(user)
+                       .password(password)
+                       .mount(mount)
+                       .protocol(shout::ShoutProtocol::HTTP)
+                       .format(format)
+                       .build()
+                       .unwrap();
+        play(conn, rx);
     });
-    out_buf
+    tx
 }
