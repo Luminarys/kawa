@@ -4,13 +4,16 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::io::Write;
 use std::slice;
+use std::sync::atomic::{AtomicBool, Ordering};
+
 
 pub fn transcode(in_data: Arc<Vec<u8>>,
              ict: &str,
              out_data: Arc<Mutex<Vec<u8>>>,
              oct: &str,
              format: codec::id::Id,
-             bitrate: Option<usize>)
+             bitrate: Option<usize>,
+             cancel: Arc<AtomicBool>)
              -> Result<thread::JoinHandle<()>, ffmpeg::Error> {
     let filter = "anull".to_owned();
 
@@ -24,7 +27,7 @@ pub fn transcode(in_data: Arc<Vec<u8>>,
 
     let io_octx = format::io::Context::new(4096,
                                            true,
-                                           out_data,
+                                           (out_data, cancel),
                                            None,
                                            Some(write_packet),
                                            None);
@@ -81,7 +84,8 @@ pub fn transcode(in_data: Arc<Vec<u8>>,
             encoded.write_interleaved(&mut octx).unwrap();
         }
 
-        octx.write_trailer().unwrap();
+        if let Ok(()) = octx.write_trailer() {
+        };
     });
     Ok(tok)
 }
@@ -162,12 +166,18 @@ macro_rules! rw_callback {
     };
 }
 
-fn write_to_buf(output: &Arc<Mutex<Vec<u8>>>, buffer: &[u8]) -> usize {
+fn write_to_buf(&(ref output, ref cancel): &(Arc<Mutex<Vec<u8>>>, Arc<AtomicBool>), buffer: &[u8]) -> i32 {
     let mut data = output.lock().unwrap();
-    data.write(buffer).unwrap()
+    if cancel.load(Ordering::SeqCst) {
+        println!("Skipping tc!");
+        data.clear();
+        return ffmpeg::sys::AVERROR_EXIT;
+    } else {
+    }
+    data.write(buffer).unwrap() as i32
 }
 
-rw_callback!(write_packet, write_to_buf, Arc<Mutex<Vec<u8>>>);
+rw_callback!(write_packet, write_to_buf, (Arc<Mutex<Vec<u8>>>, Arc<AtomicBool>));
 
 fn read_buf(&mut (ref mut pos, ref input): &mut (usize, Arc<Vec<u8>>),
             mut buffer: &mut [u8])
