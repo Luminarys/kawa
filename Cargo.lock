@@ -5,7 +5,7 @@ dependencies = [
  "ffmpeg 0.2.0-alpha.5 (git+https://github.com/luminarys/rust-ffmpeg)",
  "hyper 0.9.10 (registry+https://github.com/rust-lang/crates.io-index)",
  "libc 0.2.15 (registry+https://github.com/rust-lang/crates.io-index)",
- "shout 0.1.4 (registry+https://github.com/rust-lang/crates.io-index)",
+ "shout 0.1.5 (registry+https://github.com/rust-lang/crates.io-index)",
  "toml 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
@@ -250,7 +250,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 
 [[package]]
 name = "shout"
-version = "0.1.4"
+version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 dependencies = [
  "shout-sys 0.1.1 (registry+https://github.com/rust-lang/crates.io-index)",

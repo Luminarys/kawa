@@ -9,7 +9,8 @@ pub fn transcode(in_data: Arc<Vec<u8>>,
              ict: &str,
              out_data: Arc<Mutex<Vec<u8>>>,
              oct: &str,
-             format: codec::id::Id)
+             format: codec::id::Id,
+             bitrate: Option<usize>)
              -> Result<thread::JoinHandle<()>, ffmpeg::Error> {
     let filter = "anull".to_owned();
 
@@ -29,7 +30,7 @@ pub fn transcode(in_data: Arc<Vec<u8>>,
                                            None);
     let mut octx = format::open_custom_io(io_octx, false, oct).unwrap().output();
 
-    let mut transcoder = transcoder(&mut ictx, &mut octx, format, &filter).unwrap();
+    let mut transcoder = transcoder(&mut ictx, &mut octx, format, &filter, bitrate).unwrap();
     let tok = thread::spawn(move || {
         octx.set_metadata(ictx.metadata().to_owned());
         octx.write_header().unwrap();
@@ -95,7 +96,8 @@ struct Transcoder {
 fn transcoder(ictx: &mut format::context::Input,
               octx: &mut format::context::Output,
               codec: codec::id::Id,
-              filter_spec: &str)
+              filter_spec: &str,
+              bitrate: Option<usize>)
               -> Result<Transcoder, ffmpeg::Error> {
     let input = ictx.streams().best(media::Type::Audio).expect("could not find best audio stream");
     let decoder = try!(input.codec().decoder().audio());
@@ -113,12 +115,18 @@ fn transcoder(ictx: &mut format::context::Input,
         encoder.set_flags(ffmpeg::codec::flag::GLOBAL_HEADER);
     }
 
-    encoder.set_rate(decoder.rate() as i32);
+    // OPUS apparently only likes 48000, so this is probably fine
+    encoder.set_rate(48000);
     encoder.set_channel_layout(channel_layout);
     encoder.set_channels(channel_layout.channels());
     encoder.set_format(codec.formats().expect("unknown supported formats").next().unwrap());
-    encoder.set_bit_rate(decoder.bit_rate());
-    encoder.set_max_bit_rate(decoder.max_bit_rate());
+    if let Some(br) = bitrate {
+        encoder.set_bit_rate(br * 1000);
+        encoder.set_max_bit_rate(br * 1000);
+    } else {
+        encoder.set_bit_rate(decoder.bit_rate());
+        encoder.set_max_bit_rate(decoder.max_bit_rate());
+    }
 
     encoder.set_time_base((1, decoder.rate() as i32));
     output.set_time_base((1, decoder.rate() as i32));

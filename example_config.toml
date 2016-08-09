@@ -5,7 +5,7 @@ random_song_api="https://myradio.com:1234/random"
 [radio]
 host="host.com"
 port=8000
-username="source"
+user="source"
 password="password"
 
 [[streams]]
