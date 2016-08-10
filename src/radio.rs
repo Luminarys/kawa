@@ -74,11 +74,18 @@ fn initiate_transcode(path: String,
 fn get_queue_prebuf(queue: Arc<Mutex<Queue>>,
                     configs: &Vec<StreamConfig>)
                     -> Option<(Vec<Arc<RingBuffer<u8>>>, Vec<Arc<AtomicBool>>)> {
-    let queue = queue.lock().unwrap();
+    let mut queue = queue.lock().unwrap();
     if queue.entries.is_empty() {
         return None;
     }
-    return initiate_transcode(queue.entries[0].path.clone(), configs);
+    match initiate_transcode(queue.entries[0].path.clone(), configs) {
+        Some(r) => Some(r),
+        None => {
+            // Remove the offending entry
+            queue.entries.remove(0);
+            None
+        }
+    }
 }
 
 fn get_random_prebuf(configs: &Vec<StreamConfig>)
@@ -114,7 +121,7 @@ pub fn start_streams(radio_cfg: RadioConfig,
                                        .collect();
     loop {
         let (buffers, tokens) = if queue_prebuf.is_some() {
-            queue.lock().unwrap().entries.pop();
+            queue.lock().unwrap().entries.remove(0);
             mem::replace(&mut queue_prebuf, None).unwrap()
         } else {
             mem::replace(&mut random_prebuf, get_random_prebuf(&stream_cfgs))
