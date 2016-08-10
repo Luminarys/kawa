@@ -32,11 +32,11 @@ pub fn transcode(in_data: Arc<Vec<u8>>,
                                            Some(write_packet),
                                            None);
     let mut octx = try!(format::open_custom_io(io_octx, false, oct)).output();
+
+    let mut transcoder = try!(transcoder(&mut ictx, &mut octx, format, &filter, bitrate));
     if let None = octx.stream(0) {
         return Err(ffmpeg::Error::InvalidData);
     }
-
-    let mut transcoder = try!(transcoder(&mut ictx, &mut octx, format, &filter, bitrate));
     let tok = thread::spawn(move || {
         let mut err = None;
 
@@ -113,8 +113,12 @@ pub fn transcode(in_data: Arc<Vec<u8>>,
             };
         }
         compl.store(true, Ordering::SeqCst);
-        if let Some(e) = err {
-            println!("WARNING: A transcoding thread failed with error {:?}", e);
+        match err {
+            // Skipping behavior
+            Some(ffmpeg::Error::Exit) => {}
+            // Actual unhandled error
+            Some(e) => println!("WARNING: A transcoding thread failed with error {:?}", e),
+            None => { }
         }
     });
     Ok(tok)

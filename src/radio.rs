@@ -6,6 +6,7 @@ use std::io::Read;
 use std::fs::File;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::mem;
 
 use shout;
 use queue::{Queue, QueueEntry};
@@ -14,10 +15,93 @@ use config::{RadioConfig, StreamConfig};
 use transcode;
 use ring_buffer::RingBuffer;
 
+fn initiate_transcode(path: String,
+                      stream_cfgs: &Vec<StreamConfig>)
+                      -> Option<(Vec<Arc<RingBuffer<u8>>>, Vec<Arc<AtomicBool>>)> {
+    let mut in_buf = Vec::new();
+    let mut compl_tokens = Vec::new();
+    let mut buffers = Vec::new();
+
+    let ext = match Path::new(&path).extension() {
+        Some(e) => e,
+        None => return None,
+    };
+
+    if let None = File::open(&path).ok().and_then(|mut f| f.read_to_end(&mut in_buf).ok()) {
+        return None;
+    }
+    let in_buf = Arc::new(in_buf);
+
+    for stream in stream_cfgs.iter() {
+        let token = Arc::new(AtomicBool::new(false));
+        // 500KB Buffer
+        let out_buf = Arc::new(RingBuffer::new(500000));
+        match stream.container {
+            shout::ShoutFormat::Ogg => {
+                if let Err(e) = transcode::transcode(in_buf.clone(),
+                                                     ext.to_str().unwrap(),
+                                                     out_buf.clone(),
+                                                     "ogg",
+                                                     stream.codec,
+                                                     stream.bitrate,
+                                                     token.clone()) {
+                    println!("WARNING: Transcoder creation failed with error: {:?}", e);
+                } else {
+                    buffers.push(out_buf.clone());
+                    compl_tokens.push(token);
+                }
+            }
+            shout::ShoutFormat::MP3 => {
+                if let Err(e) = transcode::transcode(in_buf.clone(),
+                                                     ext.to_str().unwrap(),
+                                                     out_buf.clone(),
+                                                     "mp3",
+                                                     stream.codec,
+                                                     stream.bitrate,
+                                                     token.clone()) {
+                    println!("WARNING: Transcoder creation failed with error: {:?}", e);
+                } else {
+                    buffers.push(out_buf.clone());
+                    compl_tokens.push(token);
+                }
+            }
+            _ => {}
+        };
+    }
+    Some((buffers, compl_tokens))
+}
+
+fn get_queue_prebuf(queue: Arc<Mutex<Queue>>,
+                    configs: &Vec<StreamConfig>)
+                    -> Option<(Vec<Arc<RingBuffer<u8>>>, Vec<Arc<AtomicBool>>)> {
+    let queue = queue.lock().unwrap();
+    if queue.entries.is_empty() {
+        return None;
+    }
+    return initiate_transcode(queue.entries[0].path.clone(), configs);
+}
+
+fn get_random_prebuf(configs: &Vec<StreamConfig>)
+    -> (Vec<Arc<RingBuffer<u8>>>, Vec<Arc<AtomicBool>>) {
+    let mut counter = 0;
+    loop {
+        if counter == 100 {
+            panic!("Your random shit is broken.");
+        }
+        let random = get_random_song();
+        if let Some(p) = initiate_transcode(random.path.clone(), configs) {
+            return p;
+        }
+        counter += 1;
+    }
+}
+
 pub fn start_streams(radio_cfg: RadioConfig,
                      stream_cfgs: Vec<StreamConfig>,
                      queue: Arc<Mutex<Queue>>,
                      updates: Receiver<ApiMessage>) {
+    let mut random_prebuf = get_random_prebuf(&stream_cfgs);
+    let mut queue_prebuf = get_queue_prebuf(queue.clone(), &stream_cfgs);
     let buf_chans: Vec<_> = stream_cfgs.iter()
                                        .map(|stream| {
                                            start_shout_conn(radio_cfg.host.clone(),
@@ -28,83 +112,42 @@ pub fn start_streams(radio_cfg: RadioConfig,
                                                             stream.container.clone())
                                        })
                                        .collect();
-
     loop {
-        let mut queue = queue.lock().unwrap();
-        let mut compl_tokens = Vec::new();
-        let mut buffers = Vec::new();
-        if let Some(ref qe) = queue.entries.pop() {
-            let ref path = qe.path;
-            let mut f = match File::open(&path) {
-                Ok(f) => f,
-                Err(_) => break,
-            };
-            let mut in_buf = Vec::new();
-            let ext = Path::new(&path).extension().unwrap();
-            f.read_to_end(&mut in_buf).unwrap();
-            let in_buf = Arc::new(in_buf);
+        let (buffers, tokens) = if queue_prebuf.is_some() {
+            queue.lock().unwrap().entries.pop();
+            mem::replace(&mut queue_prebuf, None).unwrap()
+        } else {
+            mem::replace(&mut random_prebuf, get_random_prebuf(&stream_cfgs))
+        };
 
-            for (stream, chan) in stream_cfgs.iter().zip(buf_chans.iter()) {
-                let token = Arc::new(AtomicBool::new(false));
-                // 500KB Buffer
-                let out_buf = Arc::new(RingBuffer::new(500000));
-                match stream.container {
-                    shout::ShoutFormat::Ogg => {
-                        transcode::transcode(in_buf.clone(),
-                                             ext.to_str().unwrap(),
-                                             out_buf.clone(),
-                                             "ogg",
-                                             stream.codec,
-                                             stream.bitrate,
-                                             token.clone())
-                            .unwrap();
-                        buffers.push(out_buf.clone());
-                        chan.send(out_buf).unwrap();
-                        compl_tokens.push(token);
-                    }
-                    shout::ShoutFormat::MP3 => {
-                        transcode::transcode(in_buf.clone(),
-                                             ext.to_str().unwrap(),
-                                             out_buf.clone(),
-                                             "mp3",
-                                             stream.codec,
-                                             stream.bitrate,
-                                             token.clone())
-                            .unwrap();
-                        buffers.push(out_buf.clone());
-                        chan.send(out_buf).unwrap();
-                        compl_tokens.push(token);
-                    }
-                    _ => {}
-                };
+        for (buffer, chan) in buffers.iter().zip(buf_chans.iter()) {
+            chan.send(buffer.clone()).unwrap();
+        }
+
+        loop {
+            if queue_prebuf.is_none() {
+                queue_prebuf = get_queue_prebuf(queue.clone(), &stream_cfgs);
             }
-            drop(queue);
-            loop {
-                if compl_tokens.iter().zip(buffers.iter()).all(|(token, buffer)| {
-                    token.load(Ordering::SeqCst) && buffer.len() == 0
-                }) {
-                    break;
-                } else {
-                    if let Ok(msg) = updates.try_recv() {
-                        match msg {
-                            ApiMessage::Skip => {
-                                println!("Skipping!");
-                                for token in compl_tokens.iter() {
-                                    token.store(true, Ordering::SeqCst);
-                                }
-                                break;
+
+            if tokens.iter()
+                     .zip(buffers.iter())
+                     .all(|(token, buffer)| token.load(Ordering::SeqCst) && buffer.len() == 0) {
+                break;
+            } else {
+                if let Ok(msg) = updates.try_recv() {
+                    match msg {
+                        ApiMessage::Skip => {
+                            println!("Skipping!");
+                            for token in tokens.iter() {
+                                token.store(true, Ordering::SeqCst);
                             }
+                            break;
                         }
-                    } else {
-                        thread::sleep(Duration::from_millis(100));
                     }
+                } else {
+                    thread::sleep(Duration::from_millis(100));
                 }
             }
-        } else {
-            println!("Autoqueing!");
-            queue.entries.push(get_random_song());
-            drop(queue);
-            thread::sleep(Duration::from_millis(1000));
         }
     }
 }
