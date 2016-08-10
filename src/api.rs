@@ -1,6 +1,7 @@
 use std::sync::{Arc, Mutex};
 use std::sync::mpsc::Sender;
 use std::thread;
+use std::path::Path;
 
 use queue::{Queue, QueueEntry};
 use config::ApiConfig;
@@ -30,13 +31,17 @@ impl Handler for StreamerApi {
                 match (context.query.get("id"), context.query.get("path")) {
                     // :')))
                     (Some(id), Some(path)) => {
-                        let mut q = self.queue.lock().unwrap();
-                        q.entries.push(QueueEntry::new(id.into_owned(), path.into_owned()));
-                        response.send("{success:\"true\"}");
+                        if Path::new(&path.clone().into_owned()).exists() {
+                            let mut q = self.queue.lock().unwrap();
+                            q.entries.push(QueueEntry::new(id.into_owned(), path.into_owned()));
+                            response.send("{success:\"true\"}");
+                        } else {
+                            response.send("{success:\"false\", reason: \"Nonexistent file specified\"}");
+                        }
                     }
                     _ => {
                         response.set_status(StatusCode::BadRequest);
-                        response.send("{failure:\"true\", reason:\"missing parameters\"}");
+                        response.send("{success:\"false\", reason:\"missing parameters\"}");
                     }
                 }
             }

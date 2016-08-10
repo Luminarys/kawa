@@ -102,11 +102,15 @@ pub fn start_streams(radio_cfg: RadioConfig,
             }
         } else {
             println!("Autoqueing!");
-            queue.entries.push(QueueEntry::new("".to_owned(), "/tmp/in.flac".to_owned()));
+            queue.entries.push(get_random_song());
             drop(queue);
             thread::sleep(Duration::from_millis(1000));
         }
     }
+}
+
+fn get_random_song() -> QueueEntry {
+    QueueEntry::new("".to_owned(), "/tmp/in.flac".to_owned())
 }
 
 pub fn play(conn: shout::ShoutConn, buffer_rec: Receiver<Arc<RingBuffer<u8>>>) {

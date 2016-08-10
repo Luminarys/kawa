@@ -1,6 +1,6 @@
 use libc::{c_int, uint8_t, c_void, int64_t};
 use ffmpeg::{self, format, codec, media, frame, filter};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::thread;
 use std::io::Write;
 use std::slice;
@@ -23,7 +23,7 @@ pub fn transcode(in_data: Arc<Vec<u8>>,
                                            Some(read_packet),
                                            None,
                                            Some(seek_packet));
-    let mut ictx = format::open_custom_io(io_ictx, true, ict).unwrap().input();
+    let mut ictx = try!(format::open_custom_io(io_ictx, true, ict)).input();
 
     let io_octx = format::io::Context::new(4096,
                                            true,
@@ -31,19 +31,25 @@ pub fn transcode(in_data: Arc<Vec<u8>>,
                                            None,
                                            Some(write_packet),
                                            None);
-    let mut octx = format::open_custom_io(io_octx, false, oct).unwrap().output();
+    let mut octx = try!(format::open_custom_io(io_octx, false, oct)).output();
+    if let None = octx.stream(0) {
+        return Err(ffmpeg::Error::InvalidData);
+    }
 
-    let mut transcoder = transcoder(&mut ictx, &mut octx, format, &filter, bitrate).unwrap();
+    let mut transcoder = try!(transcoder(&mut ictx, &mut octx, format, &filter, bitrate));
     let tok = thread::spawn(move || {
+        let mut err = None;
+
         octx.set_metadata(ictx.metadata().to_owned());
-        octx.write_header().unwrap();
+        if let Err(e) = octx.write_header() {
+            err = Some(e);
+        }
 
         let in_time_base = transcoder.decoder.time_base();
         let out_time_base = octx.stream(0).unwrap().time_base();
 
         let mut decoded = frame::Audio::empty();
         let mut encoded = ffmpeg::Packet::empty();
-        let mut err = false;
         'outer: for (stream, mut packet) in ictx.packets() {
             if stream.index() == transcoder.stream {
                 packet.rescale_ts(stream.time_base(), in_time_base);
@@ -52,7 +58,10 @@ pub fn transcode(in_data: Arc<Vec<u8>>,
                     let timestamp = decoded.timestamp();
                     decoded.set_pts(timestamp);
 
-                    transcoder.filter.get("in").unwrap().source().add(&decoded).unwrap();
+                    if let Err(e) = transcoder.filter.get("in").unwrap().source().add(&decoded) {
+                        err = Some(e);
+                        break 'outer;
+                    }
 
                     while let Ok(..) = transcoder.filter
                                                  .get("out")
@@ -62,8 +71,8 @@ pub fn transcode(in_data: Arc<Vec<u8>>,
                         if let Ok(true) = transcoder.encoder.encode(&decoded, &mut encoded) {
                             encoded.set_stream(0);
                             encoded.rescale_ts(in_time_base, out_time_base);
-                            if let Err(_) = encoded.write_interleaved(&mut octx) {
-                                err = true;
+                            if let Err(e) = encoded.write_interleaved(&mut octx) {
+                                err = Some(e);
                                 break 'outer;
                             }
                         }
@@ -72,32 +81,41 @@ pub fn transcode(in_data: Arc<Vec<u8>>,
             }
         }
 
-        if !err {
-            transcoder.filter.get("in").unwrap().source().flush().unwrap();
-
-            while let Ok(..) = transcoder.filter.get("out").unwrap().sink().frame(&mut decoded) {
-                if let Ok(true) = transcoder.encoder.encode(&decoded, &mut encoded) {
-                    encoded.set_stream(0);
-                    encoded.rescale_ts(in_time_base, out_time_base);
-                    if let Err(_) = encoded.write_interleaved(&mut octx) {
-                        err = true;
-                        break;
+        if err.is_none() {
+            if let Err(e) = transcoder.filter.get("in").unwrap().source().flush() {
+                err = Some(e);
+            } else {
+                while let Ok(..) = transcoder.filter.get("out").unwrap().sink().frame(&mut decoded) {
+                    if let Ok(true) = transcoder.encoder.encode(&decoded, &mut encoded) {
+                        encoded.set_stream(0);
+                        encoded.rescale_ts(in_time_base, out_time_base);
+                        if let Err(e) = encoded.write_interleaved(&mut octx) {
+                            err = Some(e);
+                            break;
+                        }
                     }
                 }
             }
         }
-        if !err {
+        if err.is_none() {
             if let Ok(true) = transcoder.encoder.flush(&mut encoded) {
                 encoded.set_stream(0);
                 encoded.rescale_ts(in_time_base, out_time_base);
-                if let Err(_) = encoded.write_interleaved(&mut octx) {
+                if let Err(e) = encoded.write_interleaved(&mut octx) {
+                    err = Some(e);
                 }
             }
 
         }
-        if let Ok(()) = octx.write_trailer() {
-        };
+        if err.is_none() {
+            if let Err(e) = octx.write_trailer() {
+                err = Some(e)
+            };
+        }
         compl.store(true, Ordering::SeqCst);
+        if let Some(e) = err {
+            println!("WARNING: A transcoding thread failed with error {:?}", e);
+        }
     });
     Ok(tok)
 }
@@ -115,9 +133,9 @@ fn transcoder(ictx: &mut format::context::Input,
               filter_spec: &str,
               bitrate: Option<usize>)
               -> Result<Transcoder, ffmpeg::Error> {
-    let input = ictx.streams().best(media::Type::Audio).expect("could not find best audio stream");
+    let input = try!(ictx.streams().best(media::Type::Audio).ok_or(ffmpeg::Error::InvalidData));
     let decoder = try!(input.codec().decoder().audio());
-    let codec = try!(ffmpeg::encoder::find(codec).unwrap().audio());
+    let codec = try!(try!(ffmpeg::encoder::find(codec).map(|c| c.audio()).ok_or(ffmpeg::Error::InvalidData)));
     let global = octx.format().flags().contains(ffmpeg::format::flag::GLOBAL_HEADER);
 
     let mut output = try!(octx.add_stream(codec));
@@ -135,7 +153,7 @@ fn transcoder(ictx: &mut format::context::Input,
     encoder.set_rate(48000);
     encoder.set_channel_layout(channel_layout);
     encoder.set_channels(channel_layout.channels());
-    encoder.set_format(codec.formats().expect("unknown supported formats").next().unwrap());
+    encoder.set_format(try!(codec.formats().expect("unknown supported formats").next().ok_or(ffmpeg::Error::InvalidData)));
     if let Some(br) = bitrate {
         encoder.set_bit_rate(br * 1000);
         encoder.set_max_bit_rate(br * 1000);
@@ -195,12 +213,18 @@ fn read_buf(&mut (ref mut pos, ref input): &mut (usize, Arc<Vec<u8>>),
             -> i32 {
     let len = buffer.len();
     if *pos + len < input.len() {
-        let res = buffer.write(&input[*pos..*pos + len]).unwrap();
-        *pos += len;
-        res as i32
+        if let Ok(r) = buffer.write(&input[*pos..*pos + len]) {
+            *pos += len;
+            r as i32
+        } else {
+            ffmpeg::sys::AVERROR_EXTERNAL
+        }
     } else if *pos < input.len() {
-        buffer.write(&input[*pos..input.len()]).unwrap();
-        ffmpeg::sys::AVERROR_EOF
+        if let Ok(_) = buffer.write(&input[*pos..input.len()]) {
+            ffmpeg::sys::AVERROR_EOF
+        } else {
+            ffmpeg::sys::AVERROR_EXTERNAL
+        }
     } else {
         ffmpeg::sys::AVERROR_EOF
     }
@@ -233,8 +257,8 @@ fn filter(spec: &str,
                        decoder.format().name(),
                        decoder.channel_layout().bits());
 
-    try!(filter.add(&filter::find("abuffer").unwrap(), "in", &args));
-    try!(filter.add(&filter::find("abuffersink").unwrap(), "out", ""));
+    try!(filter.add(&try!(filter::find("abuffer").ok_or(ffmpeg::Error::FilterNotFound)), "in", &args));
+    try!(filter.add(&try!(filter::find("abuffersink").ok_or(ffmpeg::Error::FilterNotFound)), "out", ""));
 
     {
         let mut out = filter.get("out").unwrap();
