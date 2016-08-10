@@ -13,7 +13,7 @@ pub fn transcode(in_data: Arc<Vec<u8>>,
                  oct: &str,
                  format: codec::id::Id,
                  bitrate: Option<usize>,
-                 cancel: Arc<AtomicBool>)
+                 compl: Arc<AtomicBool>)
                  -> Result<thread::JoinHandle<()>, ffmpeg::Error> {
     let filter = "anull".to_owned();
 
@@ -27,7 +27,7 @@ pub fn transcode(in_data: Arc<Vec<u8>>,
 
     let io_octx = format::io::Context::new(4096,
                                            true,
-                                           (out_data.clone(), cancel.clone()),
+                                           (out_data.clone(), compl.clone()),
                                            None,
                                            Some(write_packet),
                                            None);
@@ -97,6 +97,7 @@ pub fn transcode(in_data: Arc<Vec<u8>>,
         }
         if let Ok(()) = octx.write_trailer() {
         };
+        compl.store(true, Ordering::SeqCst);
     });
     Ok(tok)
 }
@@ -177,12 +178,11 @@ macro_rules! rw_callback {
     };
 }
 
-fn write_to_buf(&(ref output, ref cancel): &(Arc<Mutex<Vec<u8>>>, Arc<AtomicBool>),
+fn write_to_buf(&(ref output, ref compl): &(Arc<Mutex<Vec<u8>>>, Arc<AtomicBool>),
                 buffer: &[u8])
                 -> i32 {
     let mut data = output.lock().unwrap();
-    if cancel.load(Ordering::SeqCst) {
-        data.clear();
+    if compl.load(Ordering::SeqCst) {
         return ffmpeg::sys::AVERROR_EXIT;
     }
     data.write(buffer).unwrap() as i32

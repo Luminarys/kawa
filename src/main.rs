@@ -4,6 +4,7 @@ extern crate libc;
 extern crate hyper;
 extern crate toml;
 extern crate rustc_serialize;
+extern crate ring_buffer;
 
 #[macro_use]
 extern crate rustful;

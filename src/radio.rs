@@ -18,19 +18,19 @@ pub fn start_streams(radio_cfg: RadioConfig,
                      queue: Arc<Mutex<Queue>>,
                      updates: Receiver<ApiMessage>) {
     let buf_chans: Vec<_> = stream_cfgs.iter()
-                                     .map(|stream| {
-                                         start_shout_conn(radio_cfg.host.clone(),
-                                                          radio_cfg.port,
-                                                          radio_cfg.user.clone(),
-                                                          radio_cfg.password.clone(),
-                                                          stream.mount.clone(),
-                                                          stream.container.clone())
-                                     })
-                                     .collect();
+                                       .map(|stream| {
+                                           start_shout_conn(radio_cfg.host.clone(),
+                                                            radio_cfg.port,
+                                                            radio_cfg.user.clone(),
+                                                            radio_cfg.password.clone(),
+                                                            stream.mount.clone(),
+                                                            stream.container.clone())
+                                       })
+                                       .collect();
 
     loop {
         let mut queue = queue.lock().unwrap();
-        let mut cancel_tokens = Vec::new();
+        let mut compl_tokens = Vec::new();
         let mut buffers = Vec::new();
         if let Some(ref qe) = queue.entries.pop() {
             let ref path = qe.path;
@@ -58,7 +58,7 @@ pub fn start_streams(radio_cfg: RadioConfig,
                             .unwrap();
                         buffers.push(out_buf.clone());
                         chan.send(out_buf).unwrap();
-                        cancel_tokens.push(token);
+                        compl_tokens.push(token);
                     }
                     shout::ShoutFormat::MP3 => {
                         transcode::transcode(in_buf.clone(),
@@ -71,21 +71,23 @@ pub fn start_streams(radio_cfg: RadioConfig,
                             .unwrap();
                         buffers.push(out_buf.clone());
                         chan.send(out_buf).unwrap();
-                        cancel_tokens.push(token);
+                        compl_tokens.push(token);
                     }
                     _ => {}
                 };
             }
             drop(queue);
             loop {
-                if buffers.iter().all(|buffer| buffer.lock().unwrap().is_empty()) {
+                if compl_tokens.iter().zip(buffers.iter()).all(|(token, buffer)| {
+                    token.load(Ordering::SeqCst) && buffer.lock().unwrap().is_empty()
+                }) {
                     break;
                 } else {
                     if let Ok(msg) = updates.try_recv() {
                         match msg {
                             ApiMessage::Skip => {
                                 println!("Skipping!");
-                                for token in cancel_tokens.iter() {
+                                for token in compl_tokens.iter() {
                                     token.store(true, Ordering::SeqCst);
                                 }
                                 break;
@@ -98,7 +100,7 @@ pub fn start_streams(radio_cfg: RadioConfig,
             }
         } else {
             println!("Autoqueing!");
-            queue.entries.push(QueueEntry::new("".to_owned(), "/tmp/in.mp3".to_owned()));
+            queue.entries.push(QueueEntry::new("".to_owned(), "/tmp/in.flac".to_owned()));
             drop(queue);
             thread::sleep(Duration::from_millis(1000));
         }

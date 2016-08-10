@@ -5,6 +5,7 @@ dependencies = [
  "ffmpeg 0.2.0-alpha.5 (git+https://github.com/luminarys/rust-ffmpeg)",
  "hyper 0.9.10 (registry+https://github.com/rust-lang/crates.io-index)",
  "libc 0.2.15 (registry+https://github.com/rust-lang/crates.io-index)",
+ "ring-buffer 0.1.0 (git+https://github.com/luminarys/ring-buffer)",
  "rustc-serialize 0.3.19 (registry+https://github.com/rust-lang/crates.io-index)",
  "rustful 0.9.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "shout 0.1.5 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -343,6 +344,11 @@ dependencies = [
 name = "regex-syntax"
 version = "0.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
+
+[[package]]
+name = "ring-buffer"
+version = "0.1.0"
+source = "git+https://github.com/luminarys/ring-buffer#c5f20e9de812455dd667bdfc640b6b194bd01d97"
 
 [[package]]
 name = "rustc-serialize"
