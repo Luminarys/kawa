@@ -12,6 +12,7 @@ use queue::{Queue, QueueEntry};
 use api::ApiMessage;
 use config::{RadioConfig, StreamConfig};
 use transcode;
+use ring_buffer::RingBuffer;
 
 pub fn start_streams(radio_cfg: RadioConfig,
                      stream_cfgs: Vec<StreamConfig>,
@@ -45,7 +46,8 @@ pub fn start_streams(radio_cfg: RadioConfig,
 
             for (stream, chan) in stream_cfgs.iter().zip(buf_chans.iter()) {
                 let token = Arc::new(AtomicBool::new(false));
-                let out_buf = Arc::new(Mutex::new(Vec::new()));
+                // 500KB Buffer
+                let out_buf = Arc::new(RingBuffer::new(500000));
                 match stream.container {
                     shout::ShoutFormat::Ogg => {
                         transcode::transcode(in_buf.clone(),
@@ -79,7 +81,7 @@ pub fn start_streams(radio_cfg: RadioConfig,
             drop(queue);
             loop {
                 if compl_tokens.iter().zip(buffers.iter()).all(|(token, buffer)| {
-                    token.load(Ordering::SeqCst) && buffer.lock().unwrap().is_empty()
+                    token.load(Ordering::SeqCst) && buffer.len() == 0
                 }) {
                     break;
                 } else {
@@ -107,7 +109,7 @@ pub fn start_streams(radio_cfg: RadioConfig,
     }
 }
 
-pub fn play(conn: shout::ShoutConn, buffer_rec: Receiver<Arc<Mutex<Vec<u8>>>>) {
+pub fn play(conn: shout::ShoutConn, buffer_rec: Receiver<Arc<RingBuffer<u8>>>) {
     let step = 4096;
     let mut buffer = buffer_rec.recv().unwrap();
     loop {
@@ -115,18 +117,11 @@ pub fn play(conn: shout::ShoutConn, buffer_rec: Receiver<Arc<Mutex<Vec<u8>>>>) {
             buffer = b;
         }
 
-        let mut data = buffer.lock().unwrap();
-        if step < data.len() {
-            conn.send(data.drain(0..step).collect());
-            drop(data);
+        if buffer.len() > 0 {
+            conn.send(buffer.try_read(step));
             conn.sync();
-        } else if data.len() == 0 {
-            drop(data);
-            thread::sleep(Duration::from_millis(100));
         } else {
-            conn.send(data.drain(..).collect());
-            drop(data);
-            conn.sync();
+            thread::sleep(Duration::from_millis(100));
         }
     }
 }
@@ -137,7 +132,7 @@ fn start_shout_conn(host: String,
                     password: String,
                     mount: String,
                     format: shout::ShoutFormat)
-                    -> Sender<Arc<Mutex<Vec<u8>>>> {
+                    -> Sender<Arc<RingBuffer<u8>>> {
     let (tx, rx) = mpsc::channel();
 
     thread::spawn(move || {

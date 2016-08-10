@@ -5,11 +5,11 @@ use std::thread;
 use std::io::Write;
 use std::slice;
 use std::sync::atomic::{AtomicBool, Ordering};
-
+use ring_buffer::RingBuffer;
 
 pub fn transcode(in_data: Arc<Vec<u8>>,
                  ict: &str,
-                 out_data: Arc<Mutex<Vec<u8>>>,
+                 out_data: Arc<RingBuffer<u8>>,
                  oct: &str,
                  format: codec::id::Id,
                  bitrate: Option<usize>,
@@ -178,17 +178,17 @@ macro_rules! rw_callback {
     };
 }
 
-fn write_to_buf(&(ref output, ref compl): &(Arc<Mutex<Vec<u8>>>, Arc<AtomicBool>),
+fn write_to_buf(&(ref output, ref compl): &(Arc<RingBuffer<u8>>, Arc<AtomicBool>),
                 buffer: &[u8])
                 -> i32 {
-    let mut data = output.lock().unwrap();
     if compl.load(Ordering::SeqCst) {
         return ffmpeg::sys::AVERROR_EXIT;
     }
-    data.write(buffer).unwrap() as i32
+    output.write(buffer);
+    buffer.len() as i32
 }
 
-rw_callback!(write_packet, write_to_buf, (Arc<Mutex<Vec<u8>>>, Arc<AtomicBool>));
+rw_callback!(write_packet, write_to_buf, (Arc<RingBuffer<u8>>, Arc<AtomicBool>));
 
 fn read_buf(&mut (ref mut pos, ref input): &mut (usize, Arc<Vec<u8>>),
             mut buffer: &mut [u8])

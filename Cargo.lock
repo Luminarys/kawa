@@ -348,7 +348,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 [[package]]
 name = "ring-buffer"
 version = "0.1.0"
-source = "git+https://github.com/luminarys/ring-buffer#c5f20e9de812455dd667bdfc640b6b194bd01d97"
+source = "git+https://github.com/luminarys/ring-buffer#f00fc8c3d63bbdd24cb648a640a99b8e437041b0"
 
 [[package]]
 name = "rustc-serialize"
