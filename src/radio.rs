@@ -10,17 +10,32 @@ use std::mem;
 
 use shout;
 use queue::{Queue, QueueEntry};
-use api::ApiMessage;
+use api::{ApiMessage, QueuePos};
 use config::{RadioConfig, StreamConfig};
 use transcode;
 use ring_buffer::RingBuffer;
 
-fn initiate_transcode(path: String,
-                      stream_cfgs: &Vec<StreamConfig>)
-                      -> Option<(Vec<Arc<RingBuffer<u8>>>, Vec<Arc<AtomicBool>>)> {
+struct PreBuffer {
+    buffer: Arc<RingBuffer<u8>>,
+    token: Arc<AtomicBool>,
+}
+
+impl PreBuffer {
+    fn cancel(self) {
+        self.token.store(true, Ordering::SeqCst);
+        loop {
+            if self.buffer.len() > 0 {
+                self.buffer.try_read(4096);
+            } else {
+                break;
+            }
+        }
+    }
+}
+
+fn initiate_transcode(path: String, stream_cfgs: &Vec<StreamConfig>) -> Option<Vec<PreBuffer>> {
     let mut in_buf = Vec::new();
-    let mut compl_tokens = Vec::new();
-    let mut buffers = Vec::new();
+    let mut prebufs = Vec::new();
 
     let ext = match Path::new(&path).extension() {
         Some(e) => e,
@@ -47,8 +62,10 @@ fn initiate_transcode(path: String,
                                                      token.clone()) {
                     println!("WARNING: Transcoder creation failed with error: {:?}", e);
                 } else {
-                    buffers.push(out_buf.clone());
-                    compl_tokens.push(token);
+                    prebufs.push(PreBuffer {
+                        buffer: out_buf.clone(),
+                        token: token,
+                    });
                 }
             }
             shout::ShoutFormat::MP3 => {
@@ -61,35 +78,33 @@ fn initiate_transcode(path: String,
                                                      token.clone()) {
                     println!("WARNING: Transcoder creation failed with error: {:?}", e);
                 } else {
-                    buffers.push(out_buf.clone());
-                    compl_tokens.push(token);
+                    prebufs.push(PreBuffer {
+                        buffer: out_buf.clone(),
+                        token: token,
+                    });
                 }
             }
             _ => {}
         };
     }
-    Some((buffers, compl_tokens))
+    Some(prebufs)
 }
 
 fn get_queue_prebuf(queue: Arc<Mutex<Queue>>,
                     configs: &Vec<StreamConfig>)
-                    -> Option<(Vec<Arc<RingBuffer<u8>>>, Vec<Arc<AtomicBool>>)> {
+                    -> Option<Vec<PreBuffer>> {
     let mut queue = queue.lock().unwrap();
-    if queue.entries.is_empty() {
-        return None;
-    }
-    match initiate_transcode(queue.entries[0].path.clone(), configs) {
-        Some(r) => Some(r),
-        None => {
-            // Remove the offending entry
-            queue.entries.remove(0);
-            None
+    while !queue.entries.is_empty() {
+        if let Some(r) = initiate_transcode(queue.entries[0].path.clone(), configs) {
+            return Some(r);
+        } else {
+            queue.entries.pop();
         }
     }
+    None
 }
 
-fn get_random_prebuf(configs: &Vec<StreamConfig>)
-    -> (Vec<Arc<RingBuffer<u8>>>, Vec<Arc<AtomicBool>>) {
+fn get_random_prebuf(configs: &Vec<StreamConfig>) -> Vec<PreBuffer> {
     let mut counter = 0;
     loop {
         if counter == 100 {
@@ -120,35 +135,82 @@ pub fn start_streams(radio_cfg: RadioConfig,
                                        })
                                        .collect();
     loop {
-        let (buffers, tokens) = if queue_prebuf.is_some() {
+        let prebuffers = if queue_prebuf.is_some() {
             queue.lock().unwrap().entries.remove(0);
-            mem::replace(&mut queue_prebuf, None).unwrap()
+            mem::replace(&mut queue_prebuf, get_queue_prebuf(queue.clone(), &stream_cfgs)).unwrap()
         } else {
             mem::replace(&mut random_prebuf, get_random_prebuf(&stream_cfgs))
         };
 
-        for (buffer, chan) in buffers.iter().zip(buf_chans.iter()) {
-            chan.send(buffer.clone()).unwrap();
+        for (prebuffer, chan) in prebuffers.iter().zip(buf_chans.iter()) {
+            chan.send(prebuffer.buffer.clone()).unwrap();
         }
 
         loop {
-            if queue_prebuf.is_none() {
-                queue_prebuf = get_queue_prebuf(queue.clone(), &stream_cfgs);
-            }
-
-            if tokens.iter()
-                     .zip(buffers.iter())
-                     .all(|(token, buffer)| token.load(Ordering::SeqCst) && buffer.len() == 0) {
+            if prebuffers.iter()
+                         .all(|prebuffer| {
+                             prebuffer.token.load(Ordering::SeqCst) && prebuffer.buffer.len() == 0
+                         }) {
                 break;
             } else {
                 if let Ok(msg) = updates.try_recv() {
                     match msg {
                         ApiMessage::Skip => {
-                            println!("Skipping!");
-                            for token in tokens.iter() {
-                                token.store(true, Ordering::SeqCst);
+                            for prebuffer in prebuffers.iter() {
+                                prebuffer.token.store(true, Ordering::SeqCst);
                             }
                             break;
+                        }
+                        ApiMessage::Clear => {
+                            if queue_prebuf.is_some() {
+                                for prebuf in mem::replace(&mut queue_prebuf, None).unwrap() {
+                                    prebuf.cancel();
+                                }
+                            }
+                            queue.lock().unwrap().clear();
+                        }
+                        ApiMessage::Insert(QueuePos::Head, qe) => {
+                            {
+                                let mut q = queue.lock().unwrap();
+                                q.insert(0, qe);
+                            }
+                            let old_prebufs = mem::replace(&mut queue_prebuf, get_queue_prebuf(queue.clone(), &stream_cfgs)).unwrap();
+                            for prebuf in old_prebufs {
+                                prebuf.cancel();
+                            }
+                        }
+                        ApiMessage::Insert(QueuePos::Tail, qe) => {
+                            let mut q = queue.lock().unwrap();
+                            q.push(qe);
+                            if q.len() == 1 {
+                                drop(q);
+                                queue_prebuf = get_queue_prebuf(queue.clone(), &stream_cfgs);
+                            }
+                        }
+                        ApiMessage::Remove(QueuePos::Head) => {
+                            let mut q = queue.lock().unwrap();
+                            if q.len() > 0 {
+                                q.remove(0);
+                                drop(q);
+                                let old_prebufs = mem::replace(&mut queue_prebuf, get_queue_prebuf(queue.clone(), &stream_cfgs)).unwrap();
+                                for prebuf in old_prebufs {
+                                    prebuf.cancel();
+                                }
+                            }
+                        }
+                        ApiMessage::Remove(QueuePos::Tail) => {
+                            let mut q = queue.lock().unwrap();
+                            if q.len() > 0 {
+                                q.pop();
+                            }
+                            if q.len() == 0 {
+                                drop(q);
+                                if let Some(old_prebufs) = mem::replace(&mut queue_prebuf, None) {
+                                    for prebuf in old_prebufs {
+                                        prebuf.cancel();
+                                    }
+                                }
+                            }
                         }
                     }
                 } else {

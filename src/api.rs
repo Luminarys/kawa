@@ -8,9 +8,18 @@ use config::ApiConfig;
 use rustful::{Server, Handler, Context, Response, TreeRouter, StatusCode};
 use rustc_serialize::json;
 
+pub enum QueuePos {
+    Head,
+    Tail,
+}
+
 pub enum ApiMessage {
     Skip,
+    Remove(QueuePos),
+    Insert(QueuePos, QueueEntry),
+    Clear,
 }
+
 
 #[derive(Clone)]
 struct StreamerApi {
@@ -27,16 +36,22 @@ impl Handler for StreamerApi {
                     response.send(resp);
                 }
             }
-            Some("/queue/add") => {
+            Some("/queue/insert/head") | Some("/queue/insert/tail") => {
                 match (context.query.get("id"), context.query.get("path")) {
                     // :')))
                     (Some(id), Some(path)) => {
                         if Path::new(&path.clone().into_owned()).exists() {
-                            let mut q = self.queue.lock().unwrap();
-                            q.entries.push(QueueEntry::new(id.into_owned(), path.into_owned()));
+                            let qe = QueueEntry::new(id.into_owned(), path.into_owned());
+                            let pos = if context.uri.as_utf8_path() == Some("/queue/insert/head") {
+                                QueuePos::Head
+                            } else {
+                                QueuePos::Tail
+                            };
+                            self.updates.lock().unwrap().send(ApiMessage::Insert(pos, qe)).unwrap();
                             response.send("{success:\"true\"}");
                         } else {
-                            response.send("{success:\"false\", reason: \"Nonexistent file specified\"}");
+                            response.send("{success:\"false\", reason: \"Nonexistent file \
+                                           specified\"}");
                         }
                     }
                     _ => {
@@ -45,7 +60,21 @@ impl Handler for StreamerApi {
                     }
                 }
             }
-            Some("/skip") => {
+            Some("/queue/remove/head") | Some("/queue/remove/tail") => {
+                let pos = if context.uri.as_utf8_path() == Some("/queue/remove/head") {
+                    QueuePos::Head
+                } else {
+                    QueuePos::Tail
+                };
+                self.updates.lock().unwrap().send(ApiMessage::Remove(pos)).unwrap();
+                response.send("{success:\"true\"}");
+
+            }
+            Some("/queue/clear") => {
+                self.updates.lock().unwrap().send(ApiMessage::Clear).unwrap();
+                response.send("{success:\"true\"}");
+            }
+            Some("/queue/skip") => {
                 self.updates.lock().unwrap().send(ApiMessage::Skip).unwrap();
                 response.send("{success:\"true\"}");
             }
@@ -70,9 +99,14 @@ pub fn start_api(config: ApiConfig, queue: Arc<Mutex<Queue>>, updates: Sender<Ap
                 "queue" => {
                     Get: context.clone(),
                     "/add" => Post: context.clone(),
-                },
-                "skip" => {
-                    Get: context.clone(),
+                    "/insert/head" => Post: context.clone(),
+                    "/insert/tail" => Post: context.clone(),
+                    "/remove/head" => Post: context.clone(),
+                    "/remove/tail" => Post: context.clone(),
+                    "/clear" => Post: context.clone(),
+                    "skip" => {
+                        Get: context.clone(),
+                    }
                 }
             }
         };
