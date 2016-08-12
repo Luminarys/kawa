@@ -20,6 +20,29 @@ pub enum ApiMessage {
     Clear,
 }
 
+#[derive(RustcEncodable)]
+pub struct Resp {
+    pub success: bool,
+    pub reason: Option<String>,
+}
+
+impl Resp {
+    fn success() -> Resp {
+        Resp {
+            success: true,
+            reason: None,
+        }
+    }
+
+    fn failure(reason: &str) -> Resp {
+        Resp {
+            success: false,
+            reason: Some(String::from(reason)),
+        }
+    
+    }
+}
+
 
 #[derive(Clone)]
 struct StreamerApi {
@@ -48,15 +71,14 @@ impl Handler for StreamerApi {
                                 QueuePos::Tail
                             };
                             self.updates.lock().unwrap().send(ApiMessage::Insert(pos, qe)).unwrap();
-                            response.send("{success:\"true\"}");
+                            response.send(json::encode(&Resp::success()).unwrap());
                         } else {
-                            response.send("{success:\"false\", reason: \"Nonexistent file \
-                                           specified\"}");
+                            response.send(json::encode(&Resp::failure("Nonexistent file specified")).unwrap());
                         }
                     }
                     _ => {
                         response.set_status(StatusCode::BadRequest);
-                        response.send("{success:\"false\", reason:\"missing parameters\"}");
+                        response.send(json::encode(&Resp::failure("missing parameters")).unwrap());
                     }
                 }
             }
@@ -67,16 +89,16 @@ impl Handler for StreamerApi {
                     QueuePos::Tail
                 };
                 self.updates.lock().unwrap().send(ApiMessage::Remove(pos)).unwrap();
-                response.send("{success:\"true\"}");
+                response.send(json::encode(&Resp::success()).unwrap());
 
             }
             Some("/queue/clear") => {
                 self.updates.lock().unwrap().send(ApiMessage::Clear).unwrap();
-                response.send("{success:\"true\"}");
+                response.send(json::encode(&Resp::success()).unwrap());
             }
             Some("/queue/skip") => {
                 self.updates.lock().unwrap().send(ApiMessage::Skip).unwrap();
-                response.send("{success:\"true\"}");
+                response.send(json::encode(&Resp::success()).unwrap());
             }
             Some(p) => {
                 println!("Unknown path {:?}", p);
@@ -101,9 +123,9 @@ pub fn start_api(config: ApiConfig, queue: Arc<Mutex<Queue>>, updates: Sender<Ap
                     "/add" => Post: context.clone(),
                     "/insert/head" => Post: context.clone(),
                     "/insert/tail" => Post: context.clone(),
-                    "/remove/head" => Post: context.clone(),
-                    "/remove/tail" => Post: context.clone(),
-                    "/clear" => Post: context.clone(),
+                    "/remove/head" => Get: context.clone(),
+                    "/remove/tail" => Get: context.clone(),
+                    "/clear" => Get: context.clone(),
                     "skip" => {
                         Get: context.clone(),
                     }
