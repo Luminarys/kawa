@@ -1,6 +1,7 @@
 [api]
 port=4040
-random_song_api="https://myradio.com:1234/random"
+random_song_api="http://localhost:8012/api/random"
+broadcast="http://localhost:8012/api/broadcast"
 
 [radio]
 host="host.com"
