@@ -8,9 +8,41 @@ use config::ApiConfig;
 use rustful::{Server, Handler, Context, Response, TreeRouter, StatusCode};
 use rustc_serialize::json;
 
+pub enum QueuePos {
+    Head,
+    Tail,
+}
+
 pub enum ApiMessage {
     Skip,
+    Remove(QueuePos),
+    Insert(QueuePos, QueueEntry),
+    Clear,
 }
+
+#[derive(RustcEncodable)]
+pub struct Resp {
+    pub success: bool,
+    pub reason: Option<String>,
+}
+
+impl Resp {
+    fn success() -> Resp {
+        Resp {
+            success: true,
+            reason: None,
+        }
+    }
+
+    fn failure(reason: &str) -> Resp {
+        Resp {
+            success: false,
+            reason: Some(String::from(reason)),
+        }
+    
+    }
+}
+
 
 #[derive(Clone)]
 struct StreamerApi {
@@ -27,27 +59,46 @@ impl Handler for StreamerApi {
                     response.send(resp);
                 }
             }
-            Some("/queue/add") => {
+            Some("/queue/insert/head") | Some("/queue/insert/tail") => {
                 match (context.query.get("id"), context.query.get("path")) {
                     // :')))
                     (Some(id), Some(path)) => {
                         if Path::new(&path.clone().into_owned()).exists() {
-                            let mut q = self.queue.lock().unwrap();
-                            q.entries.push(QueueEntry::new(id.into_owned(), path.into_owned()));
-                            response.send("{success:\"true\"}");
+                            let qe = QueueEntry::new(id.into_owned(), path.into_owned());
+                            let pos = if context.uri.as_utf8_path() == Some("/queue/insert/head") {
+                                QueuePos::Head
+                            } else {
+                                QueuePos::Tail
+                            };
+                            self.updates.lock().unwrap().send(ApiMessage::Insert(pos, qe)).unwrap();
+                            response.send(json::encode(&Resp::success()).unwrap());
                         } else {
-                            response.send("{success:\"false\", reason: \"Nonexistent file specified\"}");
+                            response.send(json::encode(&Resp::failure("Nonexistent file specified")).unwrap());
                         }
                     }
                     _ => {
                         response.set_status(StatusCode::BadRequest);
-                        response.send("{success:\"false\", reason:\"missing parameters\"}");
+                        response.send(json::encode(&Resp::failure("missing parameters")).unwrap());
                     }
                 }
             }
-            Some("/skip") => {
+            Some("/queue/remove/head") | Some("/queue/remove/tail") => {
+                let pos = if context.uri.as_utf8_path() == Some("/queue/remove/head") {
+                    QueuePos::Head
+                } else {
+                    QueuePos::Tail
+                };
+                self.updates.lock().unwrap().send(ApiMessage::Remove(pos)).unwrap();
+                response.send(json::encode(&Resp::success()).unwrap());
+
+            }
+            Some("/queue/clear") => {
+                self.updates.lock().unwrap().send(ApiMessage::Clear).unwrap();
+                response.send(json::encode(&Resp::success()).unwrap());
+            }
+            Some("/queue/skip") => {
                 self.updates.lock().unwrap().send(ApiMessage::Skip).unwrap();
-                response.send("{success:\"true\"}");
+                response.send(json::encode(&Resp::success()).unwrap());
             }
             Some(p) => {
                 println!("Unknown path {:?}", p);
@@ -70,9 +121,14 @@ pub fn start_api(config: ApiConfig, queue: Arc<Mutex<Queue>>, updates: Sender<Ap
                 "queue" => {
                     Get: context.clone(),
                     "/add" => Post: context.clone(),
-                },
-                "skip" => {
-                    Get: context.clone(),
+                    "/insert/head" => Post: context.clone(),
+                    "/insert/tail" => Post: context.clone(),
+                    "/remove/head" => Get: context.clone(),
+                    "/remove/tail" => Get: context.clone(),
+                    "/clear" => Get: context.clone(),
+                    "skip" => {
+                        Get: context.clone(),
+                    }
                 }
             }
         };
