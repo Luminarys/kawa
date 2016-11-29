@@ -29,7 +29,7 @@ fn main() {
     let config = match config::parse_config(s) {
         Ok(c) => c,
         Err(e) => {
-            println!("{}", e);
+            println!("Failed to parse config: {}", e);
             return
         }
     };

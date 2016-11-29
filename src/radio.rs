@@ -110,15 +110,15 @@ pub fn start_streams(radio_cfg: RadioConfig,
     let mut random_prebuf = get_random_prebuf(&stream_cfgs);
     let mut queue_prebuf = get_queue_prebuf(queue.clone(), &stream_cfgs);
     let buf_chans: Vec<_> = stream_cfgs.iter()
-                                       .map(|stream| {
-                                           start_shout_conn(radio_cfg.host.clone(),
-                                                            radio_cfg.port,
-                                                            radio_cfg.user.clone(),
-                                                            radio_cfg.password.clone(),
-                                                            stream.mount.clone(),
-                                                            stream.container.clone())
-                                       })
-                                       .collect();
+        .map(|stream| {
+            start_shout_conn(radio_cfg.host.clone(),
+                             radio_cfg.port,
+                             radio_cfg.user.clone(),
+                             radio_cfg.password.clone(),
+                             stream.mount.clone(),
+                             stream.container.clone())
+        })
+        .collect();
     loop {
         let (buffers, tokens) = if queue_prebuf.is_some() {
             queue.lock().unwrap().entries.remove(0);
@@ -137,14 +137,13 @@ pub fn start_streams(radio_cfg: RadioConfig,
             }
 
             if tokens.iter()
-                     .zip(buffers.iter())
-                     .all(|(token, buffer)| token.load(Ordering::SeqCst) && buffer.len() == 0) {
+                .zip(buffers.iter())
+                .all(|(token, buffer)| token.load(Ordering::SeqCst) && buffer.len() == 0) {
                 break;
             } else {
                 if let Ok(msg) = updates.try_recv() {
                     match msg {
                         ApiMessage::Skip => {
-                            println!("Skipping!");
                             for token in tokens.iter() {
                                 token.store(true, Ordering::SeqCst);
                             }
@@ -191,15 +190,15 @@ fn start_shout_conn(host: String,
 
     thread::spawn(move || {
         let conn = shout::ShoutConnBuilder::new()
-                       .host(host)
-                       .port(port)
-                       .user(user)
-                       .password(password)
-                       .mount(mount)
-                       .protocol(shout::ShoutProtocol::HTTP)
-                       .format(format)
-                       .build()
-                       .unwrap();
+            .host(host)
+            .port(port)
+            .user(user)
+            .password(password)
+            .mount(mount)
+            .protocol(shout::ShoutProtocol::HTTP)
+            .format(format)
+            .build()
+            .unwrap();
         play(conn, rx);
     });
     tx
