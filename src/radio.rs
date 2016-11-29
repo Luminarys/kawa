@@ -21,6 +21,32 @@ struct PreBuffer {
 }
 
 impl PreBuffer {
+    fn from_transcode(input: Arc<Vec<u8>>, ext: &str, cfg: &StreamConfig) -> Option<PreBuffer> {
+        let token = Arc::new(AtomicBool::new(false));
+        // 500KB Buffer
+        let out_buf = Arc::new(RingBuffer::new(500000));
+        let res_ext = match cfg.container {
+            shout::ShoutFormat::Ogg => "ogg",
+            shout::ShoutFormat::MP3 => "mp3",
+            _ => { return None; },
+        };
+        if let Err(e) = transcode::transcode(input,
+                                             ext,
+                                             out_buf.clone(),
+                                             res_ext,
+                                             cfg.codec,
+                                             cfg.bitrate,
+                                             token.clone()) {
+            println!("WARNING: Transcoder creation failed with error: {:?}", e);
+            None
+        } else {
+            Some(PreBuffer {
+                buffer: out_buf,
+                token: token,
+            })
+        }
+    }
+
     fn cancel(self) {
         self.token.store(true, Ordering::SeqCst);
         loop {
@@ -48,44 +74,9 @@ fn initiate_transcode(path: String, stream_cfgs: &Vec<StreamConfig>) -> Option<V
     let in_buf = Arc::new(in_buf);
 
     for stream in stream_cfgs.iter() {
-        let token = Arc::new(AtomicBool::new(false));
-        // 500KB Buffer
-        let out_buf = Arc::new(RingBuffer::new(500000));
-        match stream.container {
-            shout::ShoutFormat::Ogg => {
-                if let Err(e) = transcode::transcode(in_buf.clone(),
-                                                     ext.to_str().unwrap(),
-                                                     out_buf.clone(),
-                                                     "ogg",
-                                                     stream.codec,
-                                                     stream.bitrate,
-                                                     token.clone()) {
-                    println!("WARNING: Transcoder creation failed with error: {:?}", e);
-                } else {
-                    prebufs.push(PreBuffer {
-                        buffer: out_buf.clone(),
-                        token: token,
-                    });
-                }
-            }
-            shout::ShoutFormat::MP3 => {
-                if let Err(e) = transcode::transcode(in_buf.clone(),
-                                                     ext.to_str().unwrap(),
-                                                     out_buf.clone(),
-                                                     "mp3",
-                                                     stream.codec,
-                                                     stream.bitrate,
-                                                     token.clone()) {
-                    println!("WARNING: Transcoder creation failed with error: {:?}", e);
-                } else {
-                    prebufs.push(PreBuffer {
-                        buffer: out_buf.clone(),
-                        token: token,
-                    });
-                }
-            }
-            _ => {}
-        };
+        if let Some(prebuf) = PreBuffer::from_transcode(in_buf.clone(), ext.to_str().unwrap(), stream) {
+            prebufs.push(prebuf);
+        }
     }
     Some(prebufs)
 }
@@ -135,6 +126,7 @@ pub fn start_streams(radio_cfg: RadioConfig,
         })
         .collect();
     loop {
+        // Get prebuffers for next up song, using random if nothing's in the queue
         let prebuffers = if queue_prebuf.is_some() {
             queue.lock().unwrap().entries.remove(0);
             mem::replace(&mut queue_prebuf,
@@ -148,10 +140,13 @@ pub fn start_streams(radio_cfg: RadioConfig,
             chan.send(prebuffer.buffer.clone()).unwrap();
         }
 
+        // Song activity loop - ensures that the song is properly transcoding and handles any sort
+        // of API message that gets received in the meanwhile
         loop {
+            // If the prebuffers are all completed, complete loop iteration, requeue next song
             if prebuffers.iter()
                 .all(|prebuffer| {
-                    prebuffer.token.load(Ordering::SeqCst) && prebuffer.buffer.len() == 0
+                    prebuffer.token.load(Ordering::Acquire) && prebuffer.buffer.len() == 0
                 }) {
                 break;
             } else {
@@ -159,7 +154,7 @@ pub fn start_streams(radio_cfg: RadioConfig,
                     match msg {
                         ApiMessage::Skip => {
                             for prebuffer in prebuffers.iter() {
-                                prebuffer.token.store(true, Ordering::SeqCst);
+                                prebuffer.token.store(true, Ordering::Release);
                             }
                             break;
                         }

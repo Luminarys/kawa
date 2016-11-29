@@ -112,7 +112,7 @@ pub fn transcode(in_data: Arc<Vec<u8>>,
                 err = Some(e)
             };
         }
-        compl.store(true, Ordering::SeqCst);
+        compl.store(true, Ordering::Release);
         match err {
             // Skipping behavior
             Some(ffmpeg::Error::Exit) => {}
@@ -180,6 +180,8 @@ fn transcoder(ictx: &mut format::context::Input,
     })
 }
 
+// Convenience wrapper to generate callbacks which automatically convert C arguments into
+// specified ones for Rust code.
 macro_rules! rw_callback {
     ($name:ident, $func:ident, $t:ty) => {
         extern fn $name(opaque: *mut c_void, buffer: *mut uint8_t, buffer_len: c_int) -> c_int {
@@ -203,11 +205,10 @@ macro_rules! rw_callback {
 fn write_to_buf(&(ref output, ref compl): &(Arc<RingBuffer<u8>>, Arc<AtomicBool>),
                 buffer: &[u8])
                 -> i32 {
-    if compl.load(Ordering::SeqCst) {
+    if compl.load(Ordering::Acquire) {
         return ffmpeg::sys::AVERROR_EXIT;
     }
-    output.write(buffer);
-    buffer.len() as i32
+    output.try_write(buffer) as i32
 }
 
 rw_callback!(write_packet, write_to_buf, (Arc<RingBuffer<u8>>, Arc<AtomicBool>));
