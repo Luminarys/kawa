@@ -9,14 +9,6 @@ use rustful::{Server, Handler, Context, Response, TreeRouter, StatusCode};
 use rustful::server::Global;
 use rustc_serialize::json;
 
-type SQueue = Arc<Mutex<Queue>>;
-type ApiChan = Arc<Mutex<Sender<ApiMessage>>>;
-
-struct SData {
-    queue: SQueue,
-    chan: ApiChan,
-}
-
 pub enum QueuePos {
     Head,
     Tail,
@@ -28,6 +20,9 @@ pub enum ApiMessage {
     Insert(QueuePos, QueueEntry),
     Clear,
 }
+
+type SQueue = Arc<Mutex<Queue>>;
+type ApiChan = Arc<Mutex<Sender<ApiMessage>>>;
 
 #[derive(RustcEncodable)]
 pub struct Resp {
@@ -50,6 +45,11 @@ impl Resp {
         }
 
     }
+}
+
+struct SData {
+    queue: SQueue,
+    chan: ApiChan,
 }
 
 fn pair_opt_to_opt_pair<T, U>(p: (Option<T>, Option<U>)) -> Option<(T, U)> {
@@ -136,76 +136,6 @@ fn queue_skip(ctx: Context, response: Response) {
     let sdata = ctx.global.get::<SData>().unwrap();
     sdata.chan.lock().unwrap().send(ApiMessage::Skip).unwrap();
     response.send(json::encode(&Resp::success()).unwrap());
-}
-
-#[derive(Clone)]
-struct StreamerApi {
-    queue: Arc<Mutex<Queue>>,
-    updates: Arc<Mutex<Sender<ApiMessage>>>,
-}
-
-impl Handler for StreamerApi {
-    fn handle_request(&self, context: Context, mut response: Response) {
-        match context.uri.as_utf8_path() {
-            Some("/queue") => {
-                let q = self.queue.lock().unwrap();
-                if let Ok(resp) = json::encode(&q.entries) {
-                    response.send(resp);
-                }
-            }
-            Some("/queue/insert/head") |
-            Some("/queue/insert/tail") => {
-
-                match (context.query.get("id"), context.query.get("path")) {
-                    // :')))
-                    (Some(id), Some(path)) => {
-                        if Path::new(&path.clone().into_owned()).exists() {
-                            let qe = QueueEntry::new(id.into_owned(), path.into_owned());
-                            let pos = if context.uri.as_utf8_path() == Some("/queue/insert/head") {
-                                QueuePos::Head
-                            } else {
-                                QueuePos::Tail
-                            };
-                            self.updates.lock().unwrap().send(ApiMessage::Insert(pos, qe)).unwrap();
-                            response.send(json::encode(&Resp::success()).unwrap());
-                        } else {
-                            response.send(json::encode(&Resp::failure("Nonexistent file specified"))
-                                    .unwrap());
-                        }
-                    }
-                    _ => {
-                        response.set_status(StatusCode::BadRequest);
-                        response.send(json::encode(&Resp::failure("missing parameters")).unwrap());
-                    }
-                }
-            }
-            Some("/queue/remove/head") |
-            Some("/queue/remove/tail") => {
-                let pos = if context.uri.as_utf8_path() == Some("/queue/remove/head") {
-                    QueuePos::Head
-                } else {
-                    QueuePos::Tail
-                };
-                self.updates.lock().unwrap().send(ApiMessage::Remove(pos)).unwrap();
-                response.send(json::encode(&Resp::success()).unwrap());
-
-            }
-            Some("/queue/clear") => {
-                self.updates.lock().unwrap().send(ApiMessage::Clear).unwrap();
-                response.send(json::encode(&Resp::success()).unwrap());
-            }
-            Some("/queue/skip") => {
-                self.updates.lock().unwrap().send(ApiMessage::Skip).unwrap();
-                response.send(json::encode(&Resp::success()).unwrap());
-            }
-            Some(p) => {
-                println!("Unknown path {:?}", p);
-            }
-            None => {
-                println!("Bad path!");
-            }
-        }
-    }
 }
 
 pub fn start_api(config: ApiConfig, queue: Arc<Mutex<Queue>>, updates: Sender<ApiMessage>) {
