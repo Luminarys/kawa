@@ -5,7 +5,7 @@ use std::path::Path;
 
 use queue::{Queue, QueueEntry};
 use config::ApiConfig;
-use rustful::{Server, Handler, Context, Response, TreeRouter, StatusCode};
+use rustful::{Server, Context, Response, TreeRouter, StatusCode};
 use rustful::server::Global;
 use rustc_serialize::json;
 
@@ -59,7 +59,7 @@ fn pair_opt_to_opt_pair<T, U>(p: (Option<T>, Option<U>)) -> Option<(T, U)> {
     }
 }
 
-fn body_to_qe(mut context: Context) -> Result<QueueEntry, &'static str> {
+fn body_to_qe(context: &mut Context) -> Result<QueueEntry, &'static str> {
     context.body
         .read_json_body()
         .map_err(|_| "Body must be JSON formatted")
@@ -78,6 +78,12 @@ fn body_to_qe(mut context: Context) -> Result<QueueEntry, &'static str> {
         })
 }
 
+fn send_api_message(ctx: Context, resp: Response, msg: ApiMessage) {
+    let sdata = ctx.global.get::<SData>().unwrap();
+    sdata.chan.lock().unwrap().send(msg).unwrap();
+    resp.send(json::encode(&Resp::success()).unwrap());
+}
+
 fn queue_view(ctx: Context, response: Response) {
     let sdata = ctx.global.get::<SData>().unwrap();
     let q = sdata.queue.lock().unwrap();
@@ -86,56 +92,44 @@ fn queue_view(ctx: Context, response: Response) {
     }
 }
 
-fn queue_head_insert(ctx: Context, mut response: Response) {
-    let sdata = ctx.global.get::<SData>().unwrap();
-    match body_to_qe(ctx) {
+fn queue_head_insert(mut ctx: Context, mut resp: Response) {
+    match body_to_qe(&mut ctx) {
         Ok(qe) => {
-            sdata.chan.lock().unwrap().send(ApiMessage::Insert(QueuePos::Head, qe)).unwrap();
-            response.send(json::encode(&Resp::success()).unwrap());
+            send_api_message(ctx, resp, ApiMessage::Insert(QueuePos::Head, qe));
         }
         Err(reason) => {
-            response.set_status(StatusCode::BadRequest);
-            response.send(json::encode(&Resp::failure(reason)).unwrap());
+            resp.set_status(StatusCode::BadRequest);
+            resp.send(json::encode(&Resp::failure(reason)).unwrap());
         }
     };
 }
 
-fn queue_head_delete(ctx: Context, response: Response) {
-    let sdata = ctx.global.get::<SData>().unwrap();
-    sdata.chan.lock().unwrap().send(ApiMessage::Remove(QueuePos::Head)).unwrap();
-    response.send(json::encode(&Resp::success()).unwrap());
+fn queue_head_delete(ctx: Context, resp: Response) {
+    send_api_message(ctx, resp, ApiMessage::Remove(QueuePos::Head));
 }
 
-fn queue_tail_insert(ctx: Context, mut response: Response) {
-    let sdata = ctx.global.get::<SData>().unwrap();
-    match body_to_qe(ctx) {
+fn queue_tail_insert(mut ctx: Context, mut resp: Response) {
+    match body_to_qe(&mut ctx) {
         Ok(qe) => {
-            sdata.chan.lock().unwrap().send(ApiMessage::Insert(QueuePos::Tail, qe)).unwrap();
-            response.send(json::encode(&Resp::success()).unwrap());
+            send_api_message(ctx, resp, ApiMessage::Insert(QueuePos::Tail, qe));
         }
         Err(reason) => {
-            response.set_status(StatusCode::BadRequest);
-            response.send(json::encode(&Resp::failure(reason)).unwrap());
+            resp.set_status(StatusCode::BadRequest);
+            resp.send(json::encode(&Resp::failure(reason)).unwrap());
         }
     };
 }
 
-fn queue_tail_delete(ctx: Context, response: Response) {
-    let sdata = ctx.global.get::<SData>().unwrap();
-    sdata.chan.lock().unwrap().send(ApiMessage::Remove(QueuePos::Tail)).unwrap();
-    response.send(json::encode(&Resp::success()).unwrap());
+fn queue_tail_delete(ctx: Context, resp: Response) {
+    send_api_message(ctx, resp, ApiMessage::Remove(QueuePos::Tail));
 }
 
-fn queue_clear(ctx: Context, response: Response) {
-    let sdata = ctx.global.get::<SData>().unwrap();
-    sdata.chan.lock().unwrap().send(ApiMessage::Clear).unwrap();
-    response.send(json::encode(&Resp::success()).unwrap());
+fn queue_clear(ctx: Context, resp: Response) {
+    send_api_message(ctx, resp, ApiMessage::Clear);
 }
 
-fn queue_skip(ctx: Context, response: Response) {
-    let sdata = ctx.global.get::<SData>().unwrap();
-    sdata.chan.lock().unwrap().send(ApiMessage::Skip).unwrap();
-    response.send(json::encode(&Resp::success()).unwrap());
+fn queue_skip(ctx: Context, resp: Response) {
+    send_api_message(ctx, resp, ApiMessage::Skip);
 }
 
 pub fn start_api(config: ApiConfig, queue: Arc<Mutex<Queue>>, updates: Sender<ApiMessage>) {
