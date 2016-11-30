@@ -19,10 +19,11 @@ pub fn transcode(in_data: Arc<Vec<u8>>,
 
     let io_ictx = format::io::Context::new(4096,
                                            false,
-                                           (0usize, in_data),
+                                           (0usize, in_data.clone()),
                                            Some(read_packet),
                                            None,
-                                           Some(seek_packet));
+                                           Some(seek_packet),
+                                           Some(cleanup_input));
     let mut ictx = try!(format::open_custom_io(io_ictx, true, ict)).input();
 
     let io_octx = format::io::Context::new(4096,
@@ -30,7 +31,8 @@ pub fn transcode(in_data: Arc<Vec<u8>>,
                                            (out_data.clone(), compl.clone()),
                                            None,
                                            Some(write_packet),
-                                           None);
+                                           None,
+                                           Some(cleanup_output));
     let mut octx = try!(format::open_custom_io(io_octx, false, oct)).output();
 
     let mut transcoder = try!(transcoder(&mut ictx, &mut octx, format, &filter, bitrate));
@@ -112,6 +114,7 @@ pub fn transcode(in_data: Arc<Vec<u8>>,
                 err = Some(e)
             };
         }
+
         compl.store(true, Ordering::Release);
         match err {
             // Skipping behavior
@@ -180,6 +183,21 @@ fn transcoder(ictx: &mut format::context::Input,
     })
 }
 
+macro_rules! cleanup_callback {
+    ($name:ident, $t:ty) => {
+        fn $name(opaque: *mut c_void) {
+            unsafe {
+                let b = Box::from_raw(opaque as *mut $t);
+                // It'll drop anyways, but the intent is more clear like this
+                drop(b)
+            }
+        }
+    };
+}
+
+cleanup_callback!(cleanup_input, (usize, Arc<Vec<u8>>));
+cleanup_callback!(cleanup_output, (Arc<RingBuffer<u8>>, Arc<AtomicBool>));
+
 // Convenience wrapper to generate callbacks which automatically convert C arguments into
 // specified ones for Rust code.
 macro_rules! rw_callback {
@@ -208,7 +226,8 @@ fn write_to_buf(&(ref output, ref compl): &(Arc<RingBuffer<u8>>, Arc<AtomicBool>
     if compl.load(Ordering::Acquire) {
         return ffmpeg::sys::AVERROR_EXIT;
     }
-    output.try_write(buffer) as i32
+    output.write(buffer);
+    buffer.len() as i32
 }
 
 rw_callback!(write_packet, write_to_buf, (Arc<RingBuffer<u8>>, Arc<AtomicBool>));
