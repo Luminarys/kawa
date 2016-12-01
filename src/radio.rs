@@ -28,7 +28,9 @@ impl PreBuffer {
         let res_ext = match cfg.container {
             shout::ShoutFormat::Ogg => "ogg",
             shout::ShoutFormat::MP3 => "mp3",
-            _ => { return None; },
+            _ => {
+                return None;
+            }
         };
         if let Err(e) = transcode::transcode(input,
                                              ext,
@@ -37,7 +39,7 @@ impl PreBuffer {
                                              cfg.codec,
                                              cfg.bitrate,
                                              token.clone()) {
-            println!("WARNING: Transcoder creation failed with error: {:?}", e);
+            println!("WARNING: Transcoder creation failed with error: {}", e);
             None
         } else {
             Some(PreBuffer {
@@ -74,7 +76,9 @@ fn initiate_transcode(path: String, stream_cfgs: &Vec<StreamConfig>) -> Option<V
     let in_buf = Arc::new(in_buf);
 
     for stream in stream_cfgs.iter() {
-        if let Some(prebuf) = PreBuffer::from_transcode(in_buf.clone(), ext.to_str().unwrap(), stream) {
+        if let Some(prebuf) = PreBuffer::from_transcode(in_buf.clone(),
+                                                        ext.to_str().unwrap(),
+                                                        stream) {
             prebufs.push(prebuf);
         }
     }

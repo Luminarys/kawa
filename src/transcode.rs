@@ -13,8 +13,7 @@ pub fn transcode(in_data: Arc<Vec<u8>>,
                  oct: &str,
                  format: codec::id::Id,
                  bitrate: Option<usize>,
-                 compl: Arc<AtomicBool>)
-                 -> Result<thread::JoinHandle<()>, ffmpeg::Error> {
+                 compl: Arc<AtomicBool>) -> Result<thread::JoinHandle<()>, ffmpeg::Error> {
     let filter = "anull".to_owned();
 
     let io_ictx = format::io::Context::new(4096,
@@ -65,18 +64,19 @@ pub fn transcode(in_data: Arc<Vec<u8>>,
                         break 'outer;
                     }
 
-                    while let Ok(..) = transcoder.filter
-                                                 .get("out")
-                                                 .unwrap()
-                                                 .sink()
-                                                 .frame(&mut decoded) {
-                        if let Ok(true) = transcoder.encoder.encode(&decoded, &mut encoded) {
-                            encoded.set_stream(0);
-                            encoded.rescale_ts(in_time_base, out_time_base);
-                            if let Err(e) = encoded.write_interleaved(&mut octx) {
-                                err = Some(e);
-                                break 'outer;
+                    loop {
+                        let mut filt_frame = frame::Audio::empty();
+                        if let Ok(..) = transcoder.filter.get("out").unwrap().sink().frame(&mut filt_frame) {
+                            if let Ok(true) = transcoder.encoder.encode(&filt_frame, &mut encoded) {
+                                encoded.set_stream(0);
+                                encoded.rescale_ts(in_time_base, out_time_base);
+                                if let Err(e) = encoded.write_interleaved(&mut octx) {
+                                    err = Some(e);
+                                    break 'outer;
+                                }
                             }
+                        } else {
+                            break
                         }
                     }
                 }
@@ -120,7 +120,7 @@ pub fn transcode(in_data: Arc<Vec<u8>>,
             // Skipping behavior
             Some(ffmpeg::Error::Exit) => {}
             // Actual unhandled error
-            Some(e) => println!("WARNING: A transcoding thread failed with error {:?}", e),
+            Some(e) => println!("WARNING: A transcoding thread failed with error {}", e),
             None => { }
         }
     });
@@ -138,8 +138,7 @@ fn transcoder(ictx: &mut format::context::Input,
               octx: &mut format::context::Output,
               codec: codec::id::Id,
               filter_spec: &str,
-              bitrate: Option<usize>)
-              -> Result<Transcoder, ffmpeg::Error> {
+              bitrate: Option<usize>) -> Result<Transcoder, ffmpeg::Error> {
     let input = try!(ictx.streams().best(media::Type::Audio).ok_or(ffmpeg::Error::InvalidData));
     let decoder = try!(input.codec().decoder().audio());
     let codec = try!(try!(ffmpeg::encoder::find(codec).map(|c| c.audio()).ok_or(ffmpeg::Error::InvalidData)));
@@ -149,8 +148,8 @@ fn transcoder(ictx: &mut format::context::Input,
     let mut encoder = try!(output.codec().encoder().audio());
 
     let channel_layout = codec.channel_layouts()
-                              .map(|cls| cls.best(decoder.channel_layout().channels()))
-                              .unwrap_or(ffmpeg::channel_layout::STEREO);
+        .map(|cls| cls.best(decoder.channel_layout().channels()))
+        .unwrap_or(ffmpeg::channel_layout::STEREO);
 
     if global {
         encoder.set_flags(ffmpeg::codec::flag::GLOBAL_HEADER);
@@ -222,19 +221,17 @@ macro_rules! rw_callback {
 
 fn write_to_buf(&(ref output, ref compl): &(Arc<RingBuffer<u8>>, Arc<AtomicBool>),
                 buffer: &[u8])
-                -> i32 {
-    if compl.load(Ordering::Acquire) {
-        return ffmpeg::sys::AVERROR_EXIT;
-    }
-    output.write(buffer);
-    buffer.len() as i32
-}
+                              -> i32 {
+                                  if compl.load(Ordering::Acquire) {
+                                      return ffmpeg::sys::AVERROR_EXIT;
+                                  }
+                                  output.write(buffer);
+                                  buffer.len() as i32
+                              }
 
 rw_callback!(write_packet, write_to_buf, (Arc<RingBuffer<u8>>, Arc<AtomicBool>));
 
-fn read_buf(&mut (ref mut pos, ref input): &mut (usize, Arc<Vec<u8>>),
-            mut buffer: &mut [u8])
-            -> i32 {
+fn read_buf(&mut (ref mut pos, ref input): &mut (usize, Arc<Vec<u8>>), mut buffer: &mut [u8]) -> i32 {
     let len = buffer.len();
     if *pos + len < input.len() {
         if let Ok(r) = buffer.write(&input[*pos..*pos + len]) {
@@ -256,10 +253,7 @@ fn read_buf(&mut (ref mut pos, ref input): &mut (usize, Arc<Vec<u8>>),
 
 rw_callback!(read_packet, read_buf, (usize, Arc<Vec<u8>>));
 
-fn seek_buf(&mut (ref mut pos, ref input): &mut (usize, Arc<Vec<u8>>),
-            offset: i64,
-            whence: i32)
-            -> i64 {
+fn seek_buf(&mut (ref mut pos, ref input): &mut (usize, Arc<Vec<u8>>), offset: i64, whence: i32) -> i64 {
     if whence == ffmpeg::sys::AVSEEK_SIZE {
         return input.len() as i64;
     }
@@ -269,10 +263,7 @@ fn seek_buf(&mut (ref mut pos, ref input): &mut (usize, Arc<Vec<u8>>),
 
 rw_callback!(seek, seek_packet, seek_buf, (usize, Arc<Vec<u8>>));
 
-fn filter(spec: &str,
-          decoder: &codec::decoder::Audio,
-          encoder: &codec::encoder::Audio)
-          -> Result<filter::Graph, ffmpeg::Error> {
+fn filter(spec: &str, decoder: &codec::decoder::Audio, encoder: &codec::encoder::Audio) -> Result<filter::Graph, ffmpeg::Error> {
     let mut filter = filter::Graph::new();
 
     let args = format!("time_base={}:sample_rate={}:sample_fmt={}:channel_layout=0x{:x}",
