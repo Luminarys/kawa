@@ -1,5 +1,5 @@
 use std::sync::{Arc, Mutex};
-use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::thread;
 use std::time::Duration;
 use std::io::Read;
@@ -7,11 +7,12 @@ use std::fs::File;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::mem;
+use hyper::client::Client;
 
 use shout;
 use queue::{Queue, QueueEntry};
 use api::{ApiMessage, QueuePos};
-use config::{RadioConfig, StreamConfig};
+use config::{Config, StreamConfig};
 use transcode;
 use ring_buffer::RingBuffer;
 
@@ -57,6 +58,70 @@ impl PreBuffer {
             } else {
                 break;
             }
+        }
+    }
+}
+
+struct RadioConn {
+    tx: Sender<Arc<RingBuffer<u8>>>,
+    handle: thread::JoinHandle<()>,
+}
+
+impl RadioConn {
+    fn new(host: String,
+           port: u16,
+           user: String,
+           password: String,
+           mount: String,
+           format: shout::ShoutFormat) -> RadioConn {
+        let (tx, rx) = mpsc::channel();
+
+        let handle = thread::spawn(move || {
+            let conn = shout::ShoutConnBuilder::new()
+                .host(host)
+                .port(port)
+                .user(user)
+                .password(password)
+                .mount(mount)
+                .protocol(shout::ShoutProtocol::HTTP)
+                .format(format)
+                .build()
+                .unwrap();
+            play(conn, rx);
+        });
+        RadioConn {
+            tx: tx,
+            handle: handle,
+        }
+    }
+
+    fn replace_buffer(&mut self, buffer: Arc<RingBuffer<u8>>) {
+        self.tx.send(buffer).unwrap();
+    }
+}
+
+fn get_random_song() -> QueueEntry {
+    let client = Client::new();
+
+    let res = client.get("http://example.domain").send().unwrap();
+    QueueEntry::new("".to_owned(), "/tmp/in.flac".to_owned())
+}
+
+pub fn play(conn: shout::ShoutConn, buffer_rec: Receiver<Arc<RingBuffer<u8>>>) {
+    let step = 4096;
+    let mut buffer = buffer_rec.recv().unwrap();
+    loop {
+        match buffer_rec.try_recv() {
+            Ok(b) => { buffer = b; }
+            Err(TryRecvError::Empty) => { }
+            Err(TryRecvError::Disconnected) => { return }
+        }
+
+        if buffer.len() > 0 {
+            conn.send(buffer.try_read(step));
+            conn.sync();
+        } else {
+            thread::sleep(Duration::from_millis(100));
         }
     }
 }
@@ -113,18 +178,17 @@ fn get_random_prebuf(configs: &Vec<StreamConfig>) -> Vec<PreBuffer> {
     }
 }
 
-pub fn start_streams(radio_cfg: RadioConfig,
-                     stream_cfgs: Vec<StreamConfig>,
+pub fn start_streams(cfg: Config,
                      queue: Arc<Mutex<Queue>>,
                      updates: Receiver<ApiMessage>) {
-    let mut random_prebuf = get_random_prebuf(&stream_cfgs);
-    let mut queue_prebuf = get_queue_prebuf(queue.clone(), &stream_cfgs);
-    let buf_chans: Vec<_> = stream_cfgs.iter()
+    let mut random_prebuf = get_random_prebuf(&cfg.streams);
+    let mut queue_prebuf = get_queue_prebuf(queue.clone(), &cfg.streams);
+    let mut rconns: Vec<_> = cfg.streams.iter()
         .map(|stream| {
-            start_shout_conn(radio_cfg.host.clone(),
-                             radio_cfg.port,
-                             radio_cfg.user.clone(),
-                             radio_cfg.password.clone(),
+            RadioConn::new(cfg.radio.host.clone(),
+                             cfg.radio.port,
+                             cfg.radio.user.clone(),
+                             cfg.radio.password.clone(),
                              stream.mount.clone(),
                              stream.container.clone())
         })
@@ -134,14 +198,14 @@ pub fn start_streams(radio_cfg: RadioConfig,
         let prebuffers = if queue_prebuf.is_some() {
             queue.lock().unwrap().entries.remove(0);
             mem::replace(&mut queue_prebuf,
-                         get_queue_prebuf(queue.clone(), &stream_cfgs))
+                         get_queue_prebuf(queue.clone(), &cfg.streams))
                 .unwrap()
         } else {
-            mem::replace(&mut random_prebuf, get_random_prebuf(&stream_cfgs))
+            mem::replace(&mut random_prebuf, get_random_prebuf(&cfg.streams))
         };
 
-        for (prebuffer, chan) in prebuffers.iter().zip(buf_chans.iter()) {
-            chan.send(prebuffer.buffer.clone()).unwrap();
+        for (rconn, pb) in rconns.iter_mut().zip(prebuffers.iter()) {
+            rconn.replace_buffer(pb.buffer.clone());
         }
 
         // Song activity loop - ensures that the song is properly transcoding and handles any sort
@@ -177,7 +241,7 @@ pub fn start_streams(radio_cfg: RadioConfig,
                             }
                             let old_prebufs = mem::replace(&mut queue_prebuf,
                                                            get_queue_prebuf(queue.clone(),
-                                                                            &stream_cfgs))
+                                                                            &cfg.streams))
                                 .unwrap();
                             for prebuf in old_prebufs {
                                 prebuf.cancel();
@@ -188,7 +252,7 @@ pub fn start_streams(radio_cfg: RadioConfig,
                             q.push(qe);
                             if q.len() == 1 {
                                 drop(q);
-                                queue_prebuf = get_queue_prebuf(queue.clone(), &stream_cfgs);
+                                queue_prebuf = get_queue_prebuf(queue.clone(), &cfg.streams);
                             }
                         }
                         ApiMessage::Remove(QueuePos::Head) => {
@@ -198,7 +262,7 @@ pub fn start_streams(radio_cfg: RadioConfig,
                                 drop(q);
                                 let old_prebufs = mem::replace(&mut queue_prebuf,
                                                                get_queue_prebuf(queue.clone(),
-                                                                                &stream_cfgs))
+                                                                                &cfg.streams))
                                     .unwrap();
                                 for prebuf in old_prebufs {
                                     prebuf.cancel();
@@ -226,50 +290,4 @@ pub fn start_streams(radio_cfg: RadioConfig,
             }
         }
     }
-}
-
-fn get_random_song() -> QueueEntry {
-    QueueEntry::new("".to_owned(), "/tmp/in.flac".to_owned())
-}
-
-pub fn play(conn: shout::ShoutConn, buffer_rec: Receiver<Arc<RingBuffer<u8>>>) {
-    let step = 4096;
-    let mut buffer = buffer_rec.recv().unwrap();
-    loop {
-        if let Ok(b) = buffer_rec.try_recv() {
-            buffer = b;
-        }
-
-        if buffer.len() > 0 {
-            conn.send(buffer.try_read(step));
-            conn.sync();
-        } else {
-            thread::sleep(Duration::from_millis(100));
-        }
-    }
-}
-
-fn start_shout_conn(host: String,
-                    port: u16,
-                    user: String,
-                    password: String,
-                    mount: String,
-                    format: shout::ShoutFormat)
-                    -> Sender<Arc<RingBuffer<u8>>> {
-    let (tx, rx) = mpsc::channel();
-
-    thread::spawn(move || {
-        let conn = shout::ShoutConnBuilder::new()
-            .host(host)
-            .port(port)
-            .user(user)
-            .password(password)
-            .mount(mount)
-            .protocol(shout::ShoutProtocol::HTTP)
-            .format(format)
-            .build()
-            .unwrap();
-        play(conn, rx);
-    });
-    tx
 }

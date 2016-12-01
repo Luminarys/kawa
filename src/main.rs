@@ -40,5 +40,5 @@ fn main() {
     }
     let (tx, rx) = mpsc::channel();
     api::start_api(config.api.clone(), queue.clone(), tx);
-    radio::start_streams(config.radio.clone(), config.streams.clone(), queue, rx);
+    radio::start_streams(config.clone(), queue, rx);
 }
