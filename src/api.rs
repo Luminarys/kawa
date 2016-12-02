@@ -64,7 +64,7 @@ fn body_to_qe(context: &mut Context) -> Result<QueueEntry, &'static str> {
         .read_json_body()
         .map_err(|_| "Body must be JSON formatted")
         .and_then(|body| {
-            let id = body.find("id").and_then(|j| j.as_string()).map(|s| s.to_owned());
+            let id = body.find("id").and_then(|j| j.as_i64());
             let path = body.find("path").and_then(|j| j.as_string()).map(|s| s.to_owned());
             pair_opt_to_opt_pair((id, path)).ok_or("Body must contain id and path keys")
         })

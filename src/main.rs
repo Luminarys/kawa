@@ -36,7 +36,7 @@ fn main() {
 
     let queue = Arc::new(Mutex::new(queue::Queue::default()));
     if let Some(path) = env::args().nth(2) {
-        queue.lock().unwrap().entries.push(queue::QueueEntry::new("".to_owned(), path));
+        queue.lock().unwrap().entries.push(queue::QueueEntry::new(0, path));
     }
     let (tx, rx) = mpsc::channel();
     api::start_api(config.api.clone(), queue.clone(), tx);

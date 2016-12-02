@@ -8,11 +8,12 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::mem;
 use hyper::client::Client;
+use rustc_serialize::json;
 
 use shout;
 use queue::{Queue, QueueEntry};
 use api::{ApiMessage, QueuePos};
-use config::{Config, StreamConfig};
+use config::{Config, StreamConfig, ApiConfig};
 use transcode;
 use ring_buffer::RingBuffer;
 
@@ -100,11 +101,14 @@ impl RadioConn {
     }
 }
 
-fn get_random_song() -> QueueEntry {
+fn get_random_song(cfg: &ApiConfig) -> QueueEntry {
     let client = Client::new();
 
-    let res = client.get("http://example.domain").send().unwrap();
-    QueueEntry::new("".to_owned(), "/tmp/in.flac".to_owned())
+    // TODO: Handle failure
+    let mut res = client.get(cfg.remote_random.clone()).send().unwrap();
+    let mut body = String::new();
+    res.read_to_string(&mut body).unwrap();
+    return json::decode(&body).unwrap()
 }
 
 pub fn play(conn: shout::ShoutConn, buffer_rec: Receiver<Arc<RingBuffer<u8>>>) {
@@ -164,14 +168,14 @@ fn get_queue_prebuf(queue: Arc<Mutex<Queue>>,
     None
 }
 
-fn get_random_prebuf(configs: &Vec<StreamConfig>) -> Vec<PreBuffer> {
+fn get_random_prebuf(cfg: &Config) -> Vec<PreBuffer> {
     let mut counter = 0;
     loop {
         if counter == 100 {
             panic!("Your random shit is broken.");
         }
-        let random = get_random_song();
-        if let Some(p) = initiate_transcode(random.path.clone(), configs) {
+        let random = get_random_song(&cfg.api);
+        if let Some(p) = initiate_transcode(random.path.clone(), &cfg.streams) {
             return p;
         }
         counter += 1;
@@ -181,7 +185,7 @@ fn get_random_prebuf(configs: &Vec<StreamConfig>) -> Vec<PreBuffer> {
 pub fn start_streams(cfg: Config,
                      queue: Arc<Mutex<Queue>>,
                      updates: Receiver<ApiMessage>) {
-    let mut random_prebuf = get_random_prebuf(&cfg.streams);
+    let mut random_prebuf = get_random_prebuf(&cfg);
     let mut queue_prebuf = get_queue_prebuf(queue.clone(), &cfg.streams);
     let mut rconns: Vec<_> = cfg.streams.iter()
         .map(|stream| {
@@ -201,7 +205,7 @@ pub fn start_streams(cfg: Config,
                          get_queue_prebuf(queue.clone(), &cfg.streams))
                 .unwrap()
         } else {
-            mem::replace(&mut random_prebuf, get_random_prebuf(&cfg.streams))
+            mem::replace(&mut random_prebuf, get_random_prebuf(&cfg))
         };
 
         for (rconn, pb) in rconns.iter_mut().zip(prebuffers.iter()) {

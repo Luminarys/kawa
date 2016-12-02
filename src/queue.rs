@@ -31,12 +31,12 @@ impl Queue {
 
 #[derive(RustcDecodable, RustcEncodable)]
 pub struct QueueEntry {
-    pub id: String,
+    pub id: i64,
     pub path: String,
 }
 
 impl QueueEntry {
-    pub fn new(id: String, path: String) -> QueueEntry {
+    pub fn new(id: i64, path: String) -> QueueEntry {
         QueueEntry {
             id: id,
             path: path,
