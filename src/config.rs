@@ -2,12 +2,16 @@ use toml;
 use ffmpeg::codec;
 use shout::ShoutFormat;
 use hyper::Url;
+use std::sync::Arc;
+
+use util;
 
 #[derive(Clone)]
 pub struct Config {
     pub streams: Vec<StreamConfig>,
     pub radio: RadioConfig,
     pub api: ApiConfig,
+    pub queue: QueueConfig,
 }
 
 #[derive(Clone)]
@@ -29,7 +33,12 @@ pub struct RadioConfig {
 #[derive(Clone)]
 pub struct ApiConfig {
     pub port: u16,
-    pub remote_random: Url,
+}
+
+#[derive(Clone)]
+pub struct QueueConfig {
+    pub random: Url,
+    pub fallback: (Arc<Vec<u8>>, String)
 }
 
 fn into_table(v: toml::Value) -> Option<toml::Table> {
@@ -68,10 +77,12 @@ pub fn parse_config(input: String) -> Result<Config, String> {
     let streams = try!(parse_streams(toml.clone()));
     let radio = try!(parse_radio(toml.clone()));
     let api = try!(parse_api(toml.clone()));
+    let queue = try!(parse_queue(toml.clone()));
     Ok(Config {
         streams: streams,
         radio: radio,
         api: api,
+        queue: queue,
     })
 }
 
@@ -128,7 +139,7 @@ fn parse_stream(input: toml::Value) -> Result<StreamConfig, String> {
         .map(|i| i as usize);
 
     let mount = try!(table.remove("mount")
-        .and_then(|v| into_string(v))
+        .and_then(into_string)
         .ok_or(format!("Mount point must be a valid string.")));
 
     Ok(StreamConfig {
@@ -141,12 +152,12 @@ fn parse_stream(input: toml::Value) -> Result<StreamConfig, String> {
 
 fn parse_radio(mut input: toml::Table) -> Result<RadioConfig, String> {
     let mut table = try!(input.remove("radio")
-        .and_then(|v| into_table(v))
+        .and_then(into_table)
         .map(|t| t.clone())
         .ok_or(format!("Config must contain a valid radio table!")));
 
     let host = try!(table.remove("host")
-        .and_then(|v| into_string(v))
+        .and_then(into_string)
         .map(|s| s.to_owned())
         .ok_or(format!("Config must contain a radio table with a valid host field")));
     let port = try!(table.remove("port")
@@ -154,11 +165,11 @@ fn parse_radio(mut input: toml::Table) -> Result<RadioConfig, String> {
         .map(|i| i as u16)
         .ok_or(format!("Config must contain a radio table with a valid port field")));
     let user = try!(table.remove("user")
-        .and_then(|v| into_string(v))
+        .and_then(into_string)
         .map(|s| s.to_owned())
         .ok_or(format!("Config must contain a radio table with a valid user field")));
     let password = try!(table.remove("password")
-        .and_then(|v| into_string(v))
+        .and_then(into_string)
         .map(|s| s.to_owned())
         .ok_or(format!("Config must contain a radio table with a valid password field")));
     Ok(RadioConfig {
@@ -171,23 +182,37 @@ fn parse_radio(mut input: toml::Table) -> Result<RadioConfig, String> {
 
 fn parse_api(mut input: toml::Table) -> Result<ApiConfig, String> {
     let mut table = try!(input.remove("api")
-        .and_then(|v| into_table(v))
+        .and_then(into_table)
         .map(|t| t.clone())
         .ok_or(format!("Config must contain a valid api table!")));
-    let remote_random_str = try!(table.remove("random_song_api")
-        .and_then(|v| into_string(v))
-        .ok_or(format!("Config must contain a radio table with a valid random song api field")));
-    let remote_random = if let Ok(url) = Url::parse(&remote_random_str) {
-        url
-    } else {
-        return Err(format!("remote song api field must be a valid url"));
-    };
     let port = try!(table.remove("port")
         .and_then(|v| v.as_integer())
         .map(|i| i as u16)
         .ok_or(format!("Config must contain a api table with a valid port field")));
     Ok(ApiConfig {
         port: port,
-        remote_random: remote_random,
+    })
+}
+
+fn parse_queue(mut input: toml::Table) -> Result<QueueConfig, String> {
+    let mut table = try!(input.remove("queue")
+        .and_then(into_table)
+        .map(|t| t.clone())
+        .ok_or(format!("Config must contain a valid queue table!")));
+    let remote_random_str = try!(table.remove("random_song_api")
+        .and_then(into_string)
+        .ok_or(format!("Config must contain a radio table with a valid random_song_api field")));
+    let random = if let Ok(url) = Url::parse(&remote_random_str) {
+        url
+    } else {
+        return Err(format!("remote song api field must be a valid url"));
+    };
+    let fallback = try!(table.remove("fallback")
+        .and_then(into_string)
+        .and_then(|p| util::path_to_data(&p))
+        .ok_or(format!("Queue fallback must be present and a valid file!")));
+    Ok(QueueConfig {
+        fallback: fallback,
+        random: random,
     })
 }

@@ -2,12 +2,13 @@ use std::sync::{Arc, Mutex};
 use std::sync::mpsc::Sender;
 use std::thread;
 use std::path::Path;
-
-use queue::{Queue, QueueEntry};
-use config::ApiConfig;
 use rustful::{Server, Context, Response, TreeRouter, StatusCode};
 use rustful::server::Global;
 use rustc_serialize::json;
+
+use util;
+use queue::{Queue, QueueEntry};
+use config::ApiConfig;
 
 pub enum QueuePos {
     Head,
@@ -52,13 +53,6 @@ struct SData {
     chan: ApiChan,
 }
 
-fn pair_opt_to_opt_pair<T, U>(p: (Option<T>, Option<U>)) -> Option<(T, U)> {
-    match p {
-        (Some(a), Some(b)) => Some((a, b)),
-        _ => None,
-    }
-}
-
 fn body_to_qe(context: &mut Context) -> Result<QueueEntry, &'static str> {
     context.body
         .read_json_body()
@@ -66,7 +60,7 @@ fn body_to_qe(context: &mut Context) -> Result<QueueEntry, &'static str> {
         .and_then(|body| {
             let id = body.find("id").and_then(|j| j.as_i64());
             let path = body.find("path").and_then(|j| j.as_string()).map(|s| s.to_owned());
-            pair_opt_to_opt_pair((id, path)).ok_or("Body must contain id and path keys")
+            util::pair_opt_map((id, path)).ok_or("Body must contain id and path keys")
         })
         .map(|(id, path)| QueueEntry::new(id.to_owned(), path.to_owned()))
         .and_then(|qe| {

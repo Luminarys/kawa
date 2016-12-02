@@ -1,6 +1,9 @@
 [api]
 port=4040
-random_song="http://localhost:8012/api/random"
+
+[queue]
+random_song_api="http://localhost:8012/api/random"
+fallback="/tmp/in.flac"
 
 [radio]
 host="host.com"

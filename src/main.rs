@@ -14,6 +14,8 @@ mod transcode;
 mod config;
 mod api;
 mod queue;
+mod util;
+mod prebuffer;
 
 use std::env;
 use std::sync::{Arc, Mutex, mpsc};
@@ -34,10 +36,7 @@ fn main() {
         }
     };
 
-    let queue = Arc::new(Mutex::new(queue::Queue::default()));
-    if let Some(path) = env::args().nth(2) {
-        queue.lock().unwrap().entries.push(queue::QueueEntry::new(0, path));
-    }
+    let queue = Arc::new(Mutex::new(queue::Queue::new(config.clone())));
     let (tx, rx) = mpsc::channel();
     api::start_api(config.api.clone(), queue.clone(), tx);
     radio::start_streams(config.clone(), queue, rx);

@@ -51,6 +51,7 @@ pub fn transcode(in_data: Arc<Vec<u8>>,
 
         let mut decoded = frame::Audio::empty();
         let mut encoded = ffmpeg::Packet::empty();
+        let mut location = "";
         'outer: for (stream, mut packet) in ictx.packets() {
             if stream.index() == transcoder.stream {
                 packet.rescale_ts(stream.time_base(), in_time_base);
@@ -60,6 +61,7 @@ pub fn transcode(in_data: Arc<Vec<u8>>,
                     decoded.set_pts(timestamp);
 
                     if let Err(e) = transcoder.filter.get("in").unwrap().source().add(&decoded) {
+                        location = "Filter source adding";
                         err = Some(e);
                         break 'outer;
                     }
@@ -71,6 +73,7 @@ pub fn transcode(in_data: Arc<Vec<u8>>,
                                 encoded.set_stream(0);
                                 encoded.rescale_ts(in_time_base, out_time_base);
                                 if let Err(e) = encoded.write_interleaved(&mut octx) {
+                                    location = "Filter frame decoding";
                                     err = Some(e);
                                     break 'outer;
                                 }
@@ -85,6 +88,7 @@ pub fn transcode(in_data: Arc<Vec<u8>>,
 
         if err.is_none() {
             if let Err(e) = transcoder.filter.get("in").unwrap().source().flush() {
+                location = "Filter source flush";
                 err = Some(e);
             } else {
                 while let Ok(..) = transcoder.filter.get("out").unwrap().sink().frame(&mut decoded) {
@@ -92,6 +96,7 @@ pub fn transcode(in_data: Arc<Vec<u8>>,
                         encoded.set_stream(0);
                         encoded.rescale_ts(in_time_base, out_time_base);
                         if let Err(e) = encoded.write_interleaved(&mut octx) {
+                            location = "Encoded packet write";
                             err = Some(e);
                             break;
                         }
@@ -104,6 +109,7 @@ pub fn transcode(in_data: Arc<Vec<u8>>,
                 encoded.set_stream(0);
                 encoded.rescale_ts(in_time_base, out_time_base);
                 if let Err(e) = encoded.write_interleaved(&mut octx) {
+                    location = "Encoded packet flush";
                     err = Some(e);
                 }
             }
@@ -111,6 +117,7 @@ pub fn transcode(in_data: Arc<Vec<u8>>,
         }
         if err.is_none() {
             if let Err(e) = octx.write_trailer() {
+                location = "trailer writing";
                 err = Some(e)
             };
         }
@@ -120,7 +127,7 @@ pub fn transcode(in_data: Arc<Vec<u8>>,
             // Skipping behavior
             Some(ffmpeg::Error::Exit) => {}
             // Actual unhandled error
-            Some(e) => println!("WARNING: A transcoding thread failed with error {}", e),
+            Some(e) => println!("WARNING: A transcoding thread failed with error {}, loc {}", e, location),
             None => { }
         }
     });

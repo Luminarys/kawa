@@ -4,7 +4,7 @@ version = "0.1.0"
 authors = ["Luminarys <postmaster@gensok.io>"]
 
 [dependencies]
-shout = "0.1.5"
+shout = "0.1.6"
 libc = "0.2"
 toml = "0.2.0"
 rustful = "0.9.0"
