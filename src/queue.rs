@@ -52,7 +52,7 @@ impl Queue {
             self.start_next_tc();
         }
         let resp = mem::replace(&mut self.next, None).unwrap();
-        self.start_next_tc();
+        self.pop_head();
         return resp;
     }
 

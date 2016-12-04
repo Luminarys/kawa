@@ -104,23 +104,23 @@ pub fn transcode(in_data: Arc<Vec<u8>>,
                 }
             }
         }
+
         if err.is_none() {
             if let Ok(true) = transcoder.encoder.flush(&mut encoded) {
                 encoded.set_stream(0);
                 encoded.rescale_ts(in_time_base, out_time_base);
-                if let Err(e) = encoded.write_interleaved(&mut octx) {
-                    location = "Encoded packet flush";
-                    err = Some(e);
+                if let Err(_) = encoded.write_interleaved(&mut octx) {
+                    // Do nothing, if there is nothing left to flush it will error.
+                    // location = "Encoded packet flush";
+                    // err = Some(e);
                 }
             }
+        }
 
-        }
-        if err.is_none() {
-            if let Err(e) = octx.write_trailer() {
-                location = "trailer writing";
-                err = Some(e)
-            };
-        }
+        if let Err(e) = octx.write_trailer() {
+            location = "trailer writing";
+            err = Some(e)
+        };
 
         compl.store(true, Ordering::Release);
         match err {
@@ -227,14 +227,14 @@ macro_rules! rw_callback {
 }
 
 fn write_to_buf(&(ref output, ref compl): &(Arc<RingBuffer<u8>>, Arc<AtomicBool>),
-                buffer: &[u8])
-                              -> i32 {
-                                  if compl.load(Ordering::Acquire) {
-                                      return ffmpeg::sys::AVERROR_EXIT;
-                                  }
-                                  output.write(buffer);
-                                  buffer.len() as i32
-                              }
+                buffer: &[u8]) -> i32 {
+    if compl.load(Ordering::Acquire) {
+        println!("Cancelerino!");
+        return ffmpeg::sys::AVERROR_EXIT;
+    }
+    output.write(buffer);
+    buffer.len() as i32
+}
 
 rw_callback!(write_packet, write_to_buf, (Arc<RingBuffer<u8>>, Arc<AtomicBool>));
 
