@@ -51,9 +51,7 @@ impl Queue {
         if self.next.is_none() {
             self.start_next_tc();
         }
-        let resp = mem::replace(&mut self.next, None).unwrap();
-        self.pop_head();
-        return resp;
+        return mem::replace(&mut self.next, None).unwrap();
     }
 
     pub fn start_next_tc(&mut self) {

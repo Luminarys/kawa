@@ -93,6 +93,7 @@ pub fn start_streams(cfg: Config,
         for (rconn, pb) in rconns.iter_mut().zip(prebuffers.iter()) {
             rconn.replace_buffer(pb.buffer.clone());
         }
+        queue.lock().unwrap().pop_head();
 
         // Song activity loop - ensures that the song is properly transcoding and handles any sort
         // of API message that gets received in the meanwhile
