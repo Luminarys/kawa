@@ -38,8 +38,8 @@ impl Queue {
     pub fn pop_head(&mut self) {
         if !self.entries.is_empty() {
             self.entries.remove(0);
-            self.start_next_tc();
         }
+        self.start_next_tc();
     }
 
     pub fn clear(&mut self) {
