@@ -65,9 +65,9 @@ fn body_to_qe(context: &mut Context) -> Result<QueueEntry, &'static str> {
         .map(|(id, path)| QueueEntry::new(id.to_owned(), path.to_owned()))
         .and_then(|qe| {
             if Path::new(&qe.path).exists() {
-                Err("Song file must exist on disk")
-            } else {
                 Ok(qe)
+            } else {
+                Err("Song file must exist on disk")
             }
         })
 }
