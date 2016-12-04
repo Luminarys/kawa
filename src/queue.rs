@@ -62,7 +62,7 @@ impl Queue {
 
     fn next_buffer(&mut self) -> (Arc<Vec<u8>>, String) {
         self.next_queue_buffer()
-            .and(self.random_buffer())
+            .or(self.random_buffer())
             .unwrap_or(self.cfg.queue.fallback.clone())
     }
 
