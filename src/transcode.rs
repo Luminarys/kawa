@@ -5,7 +5,19 @@ use std::thread;
 use std::io::Write;
 use std::slice;
 use std::sync::atomic::{AtomicBool, Ordering};
+use slog::Logger;
 use ring_buffer::RingBuffer;
+
+macro_rules! exit_check(
+    ($l:expr, $s:expr, $e:expr) => (
+        match $e {
+            ffmpeg::Error::Exit => return,
+            _ => {
+                warn!($l, $s, $e);
+            }
+        }
+    )
+);
 
 pub fn transcode(in_data: Arc<Vec<u8>>,
                  ict: &str,
@@ -13,7 +25,8 @@ pub fn transcode(in_data: Arc<Vec<u8>>,
                  oct: &str,
                  format: codec::id::Id,
                  bitrate: Option<usize>,
-                 compl: Arc<AtomicBool>) -> Result<thread::JoinHandle<()>, ffmpeg::Error> {
+                 compl: Arc<AtomicBool>,
+                 log: Logger) -> Result<thread::JoinHandle<()>, ffmpeg::Error> {
     let filter = "anull".to_owned();
 
     let io_ictx = format::io::Context::new(4096,
@@ -39,11 +52,10 @@ pub fn transcode(in_data: Arc<Vec<u8>>,
         return Err(ffmpeg::Error::InvalidData);
     }
     let tok = thread::spawn(move || {
-        let mut err = None;
-
+        info!(log, "Beginning transcode!");
         octx.set_metadata(ictx.metadata().to_owned());
         if let Err(e) = octx.write_header() {
-            err = Some(e);
+            exit_check!(log, "Failed to write header: {:?}", e);
         }
 
         let in_time_base = transcoder.decoder.time_base();
@@ -51,8 +63,7 @@ pub fn transcode(in_data: Arc<Vec<u8>>,
 
         let mut decoded = frame::Audio::empty();
         let mut encoded = ffmpeg::Packet::empty();
-        let mut location = "";
-        'outer: for (stream, mut packet) in ictx.packets() {
+        for (stream, mut packet) in ictx.packets() {
             if stream.index() == transcoder.stream {
                 packet.rescale_ts(stream.time_base(), in_time_base);
 
@@ -61,9 +72,7 @@ pub fn transcode(in_data: Arc<Vec<u8>>,
                     decoded.set_pts(timestamp);
 
                     if let Err(e) = transcoder.filter.get("in").unwrap().source().add(&decoded) {
-                        location = "Filter source adding";
-                        err = Some(e);
-                        break 'outer;
+                        exit_check!(log, "Failed to add filter source: {:?}", e);
                     }
 
                     loop {
@@ -73,9 +82,7 @@ pub fn transcode(in_data: Arc<Vec<u8>>,
                                 encoded.set_stream(0);
                                 encoded.rescale_ts(in_time_base, out_time_base);
                                 if let Err(e) = encoded.write_interleaved(&mut octx) {
-                                    location = "Filter frame decoding";
-                                    err = Some(e);
-                                    break 'outer;
+                                    exit_check!(log, "Failed to write encoded packets to output: {:?}", e);
                                 }
                             }
                         } else {
@@ -86,50 +93,33 @@ pub fn transcode(in_data: Arc<Vec<u8>>,
             }
         }
 
-        if err.is_none() {
-            if let Err(e) = transcoder.filter.get("in").unwrap().source().flush() {
-                location = "Filter source flush";
-                err = Some(e);
-            } else {
-                while let Ok(..) = transcoder.filter.get("out").unwrap().sink().frame(&mut decoded) {
-                    if let Ok(true) = transcoder.encoder.encode(&decoded, &mut encoded) {
-                        encoded.set_stream(0);
-                        encoded.rescale_ts(in_time_base, out_time_base);
-                        if let Err(e) = encoded.write_interleaved(&mut octx) {
-                            location = "Encoded packet write";
-                            err = Some(e);
-                            break;
-                        }
+        if let Err(e) = transcoder.filter.get("in").unwrap().source().flush() {
+            exit_check!(log, "Failed to flush source packets: {:?}", e);
+        } else {
+            while let Ok(..) = transcoder.filter.get("out").unwrap().sink().frame(&mut decoded) {
+                if let Ok(true) = transcoder.encoder.encode(&decoded, &mut encoded) {
+                    encoded.set_stream(0);
+                    encoded.rescale_ts(in_time_base, out_time_base);
+                    if let Err(e) = encoded.write_interleaved(&mut octx) {
+                        exit_check!(log, "Failed to write decoded packets: {:?}", e);
                     }
                 }
             }
         }
 
-        if err.is_none() {
-            if let Ok(true) = transcoder.encoder.flush(&mut encoded) {
-                encoded.set_stream(0);
-                encoded.rescale_ts(in_time_base, out_time_base);
-                if let Err(_) = encoded.write_interleaved(&mut octx) {
-                    // Do nothing, if there is nothing left to flush it will error.
-                    // location = "Encoded packet flush";
-                    // err = Some(e);
-                }
+        if let Ok(true) = transcoder.encoder.flush(&mut encoded) {
+            encoded.set_stream(0);
+            encoded.rescale_ts(in_time_base, out_time_base);
+            if let Err(e) = encoded.write_interleaved(&mut octx) {
+                exit_check!(log, "Failed to flush encoded packets: {:?}", e);
             }
         }
 
         if let Err(e) = octx.write_trailer() {
-            location = "trailer writing";
-            err = Some(e)
+            exit_check!(log, "Failed to write trailer: {:?}", e);
         };
-
+        info!(log, "Transcoding completed!");
         compl.store(true, Ordering::Release);
-        match err {
-            // Skipping behavior
-            Some(ffmpeg::Error::Exit) => {}
-            // Actual unhandled error
-            Some(e) => println!("WARNING: A transcoding thread failed with error {}, loc {}", e, location),
-            None => { }
-        }
     });
     Ok(tok)
 }
@@ -229,7 +219,6 @@ macro_rules! rw_callback {
 fn write_to_buf(&(ref output, ref compl): &(Arc<RingBuffer<u8>>, Arc<AtomicBool>),
                 buffer: &[u8]) -> i32 {
     if compl.load(Ordering::Acquire) {
-        println!("Cancelerino!");
         return ffmpeg::sys::AVERROR_EXIT;
     }
     output.write(buffer);

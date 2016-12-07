@@ -5,16 +5,19 @@ use std::path::Path;
 use rustful::{Server, Context, Response, TreeRouter, StatusCode};
 use rustful::server::Global;
 use rustc_serialize::json;
+use slog::Logger;
 
 use util;
 use queue::{Queue, QueueEntry};
 use config::ApiConfig;
 
+#[derive(Debug)]
 pub enum QueuePos {
     Head,
     Tail,
 }
 
+#[derive(Debug)]
 pub enum ApiMessage {
     Skip,
     Remove(QueuePos),
@@ -51,6 +54,7 @@ impl Resp {
 struct SData {
     queue: SQueue,
     chan: ApiChan,
+    log: Logger,
 }
 
 fn body_to_qe(context: &mut Context) -> Result<QueueEntry, &'static str> {
@@ -74,6 +78,7 @@ fn body_to_qe(context: &mut Context) -> Result<QueueEntry, &'static str> {
 
 fn send_api_message(ctx: Context, resp: Response, msg: ApiMessage) {
     let sdata = ctx.global.get::<SData>().unwrap();
+    debug!(sdata.log, "Sending message to radio ctrl: {:?}", msg);
     sdata.chan.lock().unwrap().send(msg).unwrap();
     resp.send(json::encode(&Resp::success()).unwrap());
 }
@@ -126,12 +131,14 @@ fn queue_skip(ctx: Context, resp: Response) {
     send_api_message(ctx, resp, ApiMessage::Skip);
 }
 
-pub fn start_api(config: ApiConfig, queue: Arc<Mutex<Queue>>, updates: Sender<ApiMessage>) {
+pub fn start_api(config: ApiConfig, queue: Arc<Mutex<Queue>>, updates: Sender<ApiMessage>, log: Logger) {
     thread::spawn(move || {
+        info!(log, "Starting API");
         let chan = Arc::new(Mutex::new(updates));
         let sdata = SData {
             queue: queue,
             chan: chan,
+            log: log,
         };
         let gl: Global = Box::new(sdata).into();
         let router = insert_routes!{

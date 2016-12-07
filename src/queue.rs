@@ -6,23 +6,27 @@ use std::io::Read;
 use config::Config;
 use prebuffer::PreBuffer;
 use util;
+use slog::Logger;
 
 pub struct Queue {
     pub next: Option<Vec<PreBuffer>>,
     pub entries: Vec<QueueEntry>,
     cfg: Config,
+    log: Logger,
 }
 
 impl Queue {
-    pub fn new(cfg: Config) -> Queue {
+    pub fn new(cfg: Config, log: Logger) -> Queue {
         Queue {
             next: None,
             entries: Vec::new(),
             cfg: cfg,
+            log: log,
         }
     }
 
     pub fn push(&mut self, qe: QueueEntry) {
+        debug!(self.log, "Inserting {:?} into queue tail!", qe);
         self.entries.push(qe);
         if self.entries.len() == 1 {
             self.start_next_tc();
@@ -30,30 +34,36 @@ impl Queue {
     }
 
     pub fn push_head(&mut self, qe: QueueEntry) {
+        debug!(self.log, "Inserting {:?} into queue head!", qe);
         self.entries.insert(0, qe);
         self.start_next_tc();
     }
 
     pub fn pop(&mut self) {
-        self.entries.pop();
+        debug!(self.log, "Removing {:?} from queue tail!", self.entries.pop());
         if self.entries.len() == 0 {
             self.start_next_tc();
         }
     }
 
     pub fn pop_head(&mut self) {
-        if !self.entries.is_empty() {
-            self.entries.remove(0);
-        }
+        let res = if !self.entries.is_empty() {
+            Some(self.entries.remove(0))
+        } else {
+            None
+        };
+        debug!(self.log, "Removing {:?} from queue head!", res);
         self.start_next_tc();
     }
 
     pub fn clear(&mut self) {
+        debug!(self.log, "Clearing queue!");
         self.entries.clear();
         self.start_next_tc();
     }
 
     pub fn get_next_tc(&mut self) -> Vec<PreBuffer> {
+        debug!(self.log, "Extracting current pre-transcode!");
         if self.next.is_none() {
             self.start_next_tc();
         }
@@ -61,21 +71,22 @@ impl Queue {
     }
 
     pub fn start_next_tc(&mut self) {
+        debug!(self.log, "Beginning next pre-transcode!");
         self.next = Some(self.initiate_transcode());
     }
 
     fn next_buffer(&mut self) -> (Arc<Vec<u8>>, String) {
         let mut buf = self.next_queue_buffer();
         let mut tries = 10;
-        while let None = buf {
+        while buf.is_none() {
             if tries == 0 {
-                buf = self.cfg.queue.fallback.clone();
-                break;
+                warn!(self.log, "Using fallback song!");
+                return self.cfg.queue.fallback.clone();
             }
             buf = self.random_buffer();
             tries -= 1;
         }
-        buf
+        buf.unwrap()
     }
 
     fn next_queue_buffer(&mut self) -> Option<(Arc<Vec<u8>>, String)> {
@@ -83,6 +94,7 @@ impl Queue {
             {
                 let entry = &self.entries[0];
                 if let Some(r) = util::path_to_data(&entry.path) {
+                    info!(self.log, "Using queue entry {:?}", entry.path);
                     return Some(r);
                 }
             }
@@ -95,19 +107,29 @@ impl Queue {
         let client = Client::new();
 
         let mut body = String::new();
-        client.get(self.cfg.queue.random.clone())
+        let mut path = String::new();
+        let res = client.get(self.cfg.queue.random.clone())
             .send()
             .ok()
             .and_then(|mut r| r.read_to_string(&mut body).ok())
             .and_then(|_| json::decode(&body).ok())
-            .and_then(|e: QueueEntry| util::path_to_data(&e.path))
+            .and_then(|e: QueueEntry| {
+                debug!(self.log, "Attempting to use random buffer from path {:?}", e.path);
+                path = e.path.clone();
+                util::path_to_data(&e.path)
+            });
+        if res.is_some() {
+            info!(self.log, "Using random entry {:?}", path);
+        }
+        res
     }
 
     fn initiate_transcode(&mut self) -> Vec<PreBuffer> {
         let (data, ext) = self.next_buffer();
         let mut prebufs = Vec::new();
         for stream in self.cfg.streams.iter() {
-            if let Some(prebuf) = PreBuffer::from_transcode(data.clone(), &ext, stream) {
+            let slog = self.log.new(o!("Transcoder, mount" => stream.mount.clone()));
+            if let Some(prebuf) = PreBuffer::from_transcode(data.clone(), &ext, stream, slog) {
                 prebufs.push(prebuf);
             }
         }
@@ -115,7 +137,7 @@ impl Queue {
     }
 }
 
-#[derive(RustcDecodable, RustcEncodable)]
+#[derive(Debug, RustcDecodable, RustcEncodable)]
 pub struct QueueEntry {
     pub id: i64,
     pub path: String,

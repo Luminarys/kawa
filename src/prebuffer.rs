@@ -1,5 +1,6 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use slog::Logger;
 use shout;
 use config::StreamConfig;
 use ring_buffer::RingBuffer;
@@ -8,10 +9,11 @@ use transcode;
 pub struct PreBuffer {
     pub buffer: Arc<RingBuffer<u8>>,
     pub token: Arc<AtomicBool>,
+    log: Logger,
 }
 
 impl PreBuffer {
-    pub fn from_transcode(input: Arc<Vec<u8>>, ext: &str, cfg: &StreamConfig) -> Option<PreBuffer> {
+    pub fn from_transcode(input: Arc<Vec<u8>>, ext: &str, cfg: &StreamConfig, log: Logger) -> Option<PreBuffer> {
         let token = Arc::new(AtomicBool::new(false));
         // 500KB Buffer
         let out_buf = Arc::new(RingBuffer::new(500000));
@@ -19,7 +21,7 @@ impl PreBuffer {
             shout::ShoutFormat::Ogg => "ogg",
             shout::ShoutFormat::MP3 => "mp3",
             _ => {
-                return None;
+                unreachable!();
             }
         };
         if let Err(e) = transcode::transcode(input,
@@ -28,18 +30,21 @@ impl PreBuffer {
                                              res_ext,
                                              cfg.codec,
                                              cfg.bitrate,
-                                             token.clone()) {
-            println!("WARNING: Transcoder creation failed with error: {}", e);
+                                             token.clone(),
+                                             log.clone()) {
+            crit!(log, "Transcoder creation error: {}", e);
             None
         } else {
             Some(PreBuffer {
                 buffer: out_buf,
                 token: token,
+                log: log,
             })
         }
     }
 
     pub fn cancel(&mut self) {
+        debug!(self.log, "Cancelling transcode!");
         self.token.store(true, Ordering::SeqCst);
     }
 }
