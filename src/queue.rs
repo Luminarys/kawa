@@ -72,7 +72,12 @@ impl Queue {
 
     pub fn start_next_tc(&mut self) {
         debug!(self.log, "Beginning next pre-transcode!");
-        self.next = Some(self.initiate_transcode());
+        loop {
+            if let Some(pbs) = self.initiate_transcode() {
+                self.next = Some(pbs);
+                return;
+            }
+        }
     }
 
     fn next_buffer(&mut self) -> (Arc<Vec<u8>>, String) {
@@ -124,16 +129,19 @@ impl Queue {
         res
     }
 
-    fn initiate_transcode(&mut self) -> Vec<PreBuffer> {
+    fn initiate_transcode(&mut self) -> Option<Vec<PreBuffer>> {
         let (data, ext) = self.next_buffer();
         let mut prebufs = Vec::new();
         for stream in self.cfg.streams.iter() {
             let slog = self.log.new(o!("Transcoder, mount" => stream.mount.clone()));
             if let Some(prebuf) = PreBuffer::from_transcode(data.clone(), &ext, stream, slog) {
                 prebufs.push(prebuf);
+            } else {
+                // Terminate if any prebuffers fail to create.
+                return None;
             }
         }
-        prebufs
+        Some(prebufs)
     }
 }
 
