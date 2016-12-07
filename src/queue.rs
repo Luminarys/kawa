@@ -24,6 +24,9 @@ impl Queue {
 
     pub fn push(&mut self, qe: QueueEntry) {
         self.entries.push(qe);
+        if self.entries.len() == 1 {
+            self.start_next_tc();
+        }
     }
 
     pub fn push_head(&mut self, qe: QueueEntry) {
@@ -33,6 +36,9 @@ impl Queue {
 
     pub fn pop(&mut self) {
         self.entries.pop();
+        if self.entries.len() == 0 {
+            self.start_next_tc();
+        }
     }
 
     pub fn pop_head(&mut self) {
@@ -59,9 +65,17 @@ impl Queue {
     }
 
     fn next_buffer(&mut self) -> (Arc<Vec<u8>>, String) {
-        self.next_queue_buffer()
-            .or(self.random_buffer())
-            .unwrap_or(self.cfg.queue.fallback.clone())
+        let mut buf = self.next_queue_buffer();
+        let mut tries = 10;
+        while let None = buf {
+            if tries == 0 {
+                buf = self.cfg.queue.fallback.clone();
+                break;
+            }
+            buf = self.random_buffer();
+            tries -= 1;
+        }
+        buf
     }
 
     fn next_queue_buffer(&mut self) -> Option<(Arc<Vec<u8>>, String)> {
