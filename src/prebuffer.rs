@@ -32,7 +32,7 @@ impl PreBuffer {
                                              cfg.bitrate,
                                              token.clone(),
                                              log.clone()) {
-            crit!(log, "Transcoder creation error: {}", e);
+            crit!(log, "Transcoder creation failed: {}", e);
             None
         } else {
             Some(PreBuffer {

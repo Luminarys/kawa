@@ -68,8 +68,7 @@ pub fn play(conn: shout::ShoutConn, buffer_rec: Receiver<Arc<RingBuffer<u8>>>, l
             if let Err(_) = conn.send(buffer.try_read(step)) {
                 warn!(log, "Failed to send data, attempting to reconnect");
                 if let Err(_) = conn.reconnect() {
-                    crit!(log, "Failed to reconnect shoutconn");
-                    panic!("!");
+                    crit!(log, "Failed to reconnect");
                 }
             }
             conn.sync();
