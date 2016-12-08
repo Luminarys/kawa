@@ -44,7 +44,7 @@ impl PreBuffer {
     }
 
     pub fn cancel(&mut self) {
-        debug!(self.log, "Cancelling transcode!");
+        debug!(self.log, "Stopping transcode!");
         self.token.store(true, Ordering::SeqCst);
     }
 }

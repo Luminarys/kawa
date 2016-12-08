@@ -11,6 +11,7 @@ use slog::Logger;
 pub struct Queue {
     pub next: Option<Vec<PreBuffer>>,
     pub entries: Vec<QueueEntry>,
+    counter: usize,
     cfg: Config,
     log: Logger,
 }
@@ -22,6 +23,7 @@ impl Queue {
             entries: Vec::new(),
             cfg: cfg,
             log: log,
+            counter: 0,
         }
     }
 
@@ -132,8 +134,12 @@ impl Queue {
     fn initiate_transcode(&mut self) -> Option<Vec<PreBuffer>> {
         let (data, ext) = self.next_buffer();
         let mut prebufs = Vec::new();
+        debug!(self.log, "Attempting to spawn transcoder with ID: {:?}", self.counter);
         for stream in self.cfg.streams.iter() {
-            let slog = self.log.new(o!("Transcoder, mount" => stream.mount.clone()));
+            let slog = self.log.new(o!(
+                    "Transcoder, mount" => stream.mount.clone(),
+                    "QID" => self.counter
+            ));
             if let Some(prebuf) = PreBuffer::from_transcode(data.clone(), &ext, stream, slog) {
                 prebufs.push(prebuf);
             } else {
@@ -141,6 +147,7 @@ impl Queue {
                 return None;
             }
         }
+        self.counter += 1;
         Some(prebufs)
     }
 }

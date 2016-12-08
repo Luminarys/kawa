@@ -11,7 +11,10 @@ use ring_buffer::RingBuffer;
 macro_rules! exit_check(
     ($l:expr, $s:expr, $e:expr) => (
         match $e {
-            ffmpeg::Error::Exit => return,
+            ffmpeg::Error::Exit => {
+                debug!($l, "Exiting due to cancellation");
+                return;
+            },
             _ => {
                 warn!($l, $s, $e);
             }
