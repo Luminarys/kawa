@@ -22,6 +22,16 @@ macro_rules! exit_check(
     )
 );
 
+struct Dropper {
+    compl: Arc<AtomicBool>,
+}
+
+impl Drop for Dropper {
+    fn drop(&mut self) {
+        self.compl.store(true, Ordering::Release);
+    }
+}
+
 pub fn transcode(in_data: Arc<Vec<u8>>,
                  ict: &str,
                  out_data: Arc<RingBuffer<u8>>,
@@ -60,6 +70,8 @@ pub fn transcode(in_data: Arc<Vec<u8>>,
         if let Err(e) = octx.write_header() {
             exit_check!(log, "Failed to write header: {:?}", e);
         }
+        // Ensures that we mark the token as true once we're done.
+        let _d = Dropper { compl: compl };
 
         let in_time_base = transcoder.decoder.time_base();
         let out_time_base = octx.stream(0).unwrap().time_base();
@@ -122,7 +134,6 @@ pub fn transcode(in_data: Arc<Vec<u8>>,
             exit_check!(log, "Failed to write trailer: {:?}", e);
         };
         info!(log, "Transcoding completed!");
-        compl.store(true, Ordering::Release);
     });
     Ok(tok)
 }

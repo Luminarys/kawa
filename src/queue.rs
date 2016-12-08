@@ -134,7 +134,7 @@ impl Queue {
     fn initiate_transcode(&mut self) -> Option<Vec<PreBuffer>> {
         let (data, ext) = self.next_buffer();
         let mut prebufs = Vec::new();
-        debug!(self.log, "Attempting to spawn transcoder with ID: {:?}", self.counter);
+        debug!(self.log, "Attempting to spawn transcoders with ID: {:?}", self.counter);
         for stream in self.cfg.streams.iter() {
             let slog = self.log.new(o!(
                     "Transcoder, mount" => stream.mount.clone(),

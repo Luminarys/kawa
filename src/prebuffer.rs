@@ -6,10 +6,11 @@ use config::StreamConfig;
 use ring_buffer::RingBuffer;
 use transcode;
 
+#[derive(Clone)]
 pub struct PreBuffer {
     pub buffer: Arc<RingBuffer<u8>>,
     pub token: Arc<AtomicBool>,
-    log: Logger,
+    pub log: Logger,
 }
 
 impl PreBuffer {
@@ -46,11 +47,5 @@ impl PreBuffer {
     pub fn cancel(&mut self) {
         debug!(self.log, "Stopping transcode!");
         self.token.store(true, Ordering::SeqCst);
-    }
-}
-
-impl Drop for PreBuffer {
-    fn drop(&mut self) {
-        self.cancel();
     }
 }

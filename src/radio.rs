@@ -9,10 +9,10 @@ use shout;
 use queue::Queue;
 use api::{ApiMessage, QueuePos};
 use config::Config;
-use ring_buffer::RingBuffer;
+use prebuffer::PreBuffer;
 
 struct RadioConn {
-    tx: Sender<Arc<RingBuffer<u8>>>,
+    tx: Sender<PreBuffer>,
     handle: thread::JoinHandle<()>,
 }
 
@@ -45,27 +45,28 @@ impl RadioConn {
         }
     }
 
-    fn replace_buffer(&mut self, buffer: Arc<RingBuffer<u8>>) {
+    fn replace_buffer(&mut self, buffer: PreBuffer) {
         self.tx.send(buffer).unwrap();
     }
 }
 
-pub fn play(conn: shout::ShoutConn, buffer_rec: Receiver<Arc<RingBuffer<u8>>>, log: Logger) {
+pub fn play(conn: shout::ShoutConn, buffer_rec: Receiver<PreBuffer>, log: Logger) {
     let step = 4096;
     debug!(log, "Awaiting initial buffer");
-    let mut buffer = buffer_rec.recv().unwrap();
+    let mut pb = buffer_rec.recv().unwrap();
     loop {
         match buffer_rec.try_recv() {
             Ok(b) => {
                 debug!(log, "Received new buffer");
-                buffer = b;
+                debug!(b.log, "In use by radio thread");
+                pb = b;
             }
             Err(TryRecvError::Empty) => { }
             Err(TryRecvError::Disconnected) => { return; }
         }
 
-        if buffer.len() > 0 {
-            if let Err(_) = conn.send(buffer.try_read(step)) {
+        if pb.buffer.len() > 0 {
+            if let Err(_) = conn.send(pb.buffer.try_read(step)) {
                 warn!(log, "Failed to send data, attempting to reconnect");
                 if let Err(_) = conn.reconnect() {
                     crit!(log, "Failed to reconnect");
@@ -73,8 +74,11 @@ pub fn play(conn: shout::ShoutConn, buffer_rec: Receiver<Arc<RingBuffer<u8>>>, l
             }
             conn.sync();
         } else {
-            // We're starved, probably should not happen
+            // We're starved, probably should not happen.
+            // If so terminate to ensure that we get on with
+            // next TC ASAP
             warn!(log, "Starved for data!");
+            pb.cancel();
             thread::sleep(Duration::from_millis(100));
         }
     }
@@ -108,7 +112,7 @@ pub fn start_streams(cfg: Config,
         for (rconn, pb) in rconns.iter_mut().zip(prebuffers.iter()) {
             // The order is guarenteed to be correct because we always iterate by the config
             // ordering.
-            rconn.replace_buffer(pb.buffer.clone());
+            rconn.replace_buffer(pb.clone());
         }
         debug!(log, "Removing queue head");
         queue.lock().unwrap().pop_head();
@@ -117,9 +121,10 @@ pub fn start_streams(cfg: Config,
         // Song activity loop - ensures that the song is properly transcoding and handles any sort
         // of API message that gets received in the meanwhile
         loop {
-            // If the prebuffers are all completed, complete loop iteration, requeue next song
+            // If any prebuffer completes, just move on to next song. We want to minimize downtime
+            // even if it means some songs get cut off early
             if prebuffers.iter()
-                .all(|prebuffer| {
+                .any(|prebuffer| {
                     prebuffer.token.load(Ordering::Acquire) && prebuffer.buffer.len() == 0
                 }) {
                 break;
