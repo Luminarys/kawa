@@ -4,7 +4,7 @@ use std::thread;
 use std::path::Path;
 use rustful::{Server, Context, Response, TreeRouter, StatusCode};
 use rustful::server::Global;
-use rustc_serialize::json;
+use serde_json as serde;
 use slog::Logger;
 
 use util;
@@ -28,7 +28,7 @@ pub enum ApiMessage {
 type SQueue = Arc<Mutex<Queue>>;
 type ApiChan = Arc<Mutex<Sender<ApiMessage>>>;
 
-#[derive(RustcEncodable)]
+#[derive(Serialize)]
 pub struct Resp {
     pub success: bool,
     pub reason: Option<String>,
@@ -80,13 +80,13 @@ fn send_api_message(ctx: Context, resp: Response, msg: ApiMessage) {
     let sdata = ctx.global.get::<SData>().unwrap();
     debug!(sdata.log, "Sending message to radio ctrl: {:?}", msg);
     sdata.chan.lock().unwrap().send(msg).unwrap();
-    resp.send(json::encode(&Resp::success()).unwrap());
+    resp.send(serde::to_string(&Resp::success()).unwrap());
 }
 
 fn queue_view(ctx: Context, response: Response) {
     let sdata = ctx.global.get::<SData>().unwrap();
     let q = sdata.queue.lock().unwrap();
-    if let Ok(resp) = json::encode(&q.entries) {
+    if let Ok(resp) = serde::to_string(&q.entries) {
         response.send(resp);
     }
 }
@@ -98,7 +98,7 @@ fn queue_head_insert(mut ctx: Context, mut resp: Response) {
         }
         Err(reason) => {
             resp.set_status(StatusCode::BadRequest);
-            resp.send(json::encode(&Resp::failure(reason)).unwrap());
+            resp.send(serde::to_string(&Resp::failure(reason)).unwrap());
         }
     };
 }
@@ -114,7 +114,7 @@ fn queue_tail_insert(mut ctx: Context, mut resp: Response) {
         }
         Err(reason) => {
             resp.set_status(StatusCode::BadRequest);
-            resp.send(json::encode(&Resp::failure(reason)).unwrap());
+            resp.send(serde::to_string(&Resp::failure(reason)).unwrap());
         }
     };
 }

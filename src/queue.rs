@@ -1,12 +1,12 @@
 use std::mem;
 use hyper::client::Client;
-use rustc_serialize::json;
 use std::sync::Arc;
 use std::io::Read;
 use config::Config;
 use prebuffer::PreBuffer;
 use util;
 use slog::Logger;
+use serde_json as serde;
 
 pub struct Queue {
     pub next: Option<Vec<PreBuffer>>,
@@ -115,11 +115,11 @@ impl Queue {
 
         let mut body = String::new();
         let mut path = String::new();
-        let res = client.get(self.cfg.queue.random.clone())
+        let res = client.get(&self.cfg.queue.random.clone())
             .send()
             .ok()
             .and_then(|mut r| r.read_to_string(&mut body).ok())
-            .and_then(|_| json::decode(&body).ok())
+            .and_then(|_| serde::from_str(&body).ok())
             .and_then(|e: QueueEntry| {
                 debug!(self.log, "Attempting to use random buffer from path {:?}", e.path);
                 path = e.path.clone();
@@ -152,7 +152,7 @@ impl Queue {
     }
 }
 
-#[derive(Debug, RustcDecodable, RustcEncodable)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct QueueEntry {
     pub id: i64,
     pub path: String,
