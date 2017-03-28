@@ -6,11 +6,14 @@ extern crate ffmpeg;
 extern crate libc;
 extern crate hyper;
 extern crate toml;
-extern crate rustc_serialize;
 extern crate ring_buffer;
+extern crate serde_json;
 
 #[macro_use]
 extern crate rustful;
+#[macro_use]
+extern crate serde_derive;
+
 
 mod radio;
 mod transcode;
@@ -47,7 +50,7 @@ fn main() {
     }
 
     info!(root_log, "Initializing config");
-    let config = match config::parse_config(s) {
+    let config = match config::parse_config(&s) {
         Ok(c) => c,
         Err(e) => {
             crit!(root_log, "Failed to parse config: {}", e);
