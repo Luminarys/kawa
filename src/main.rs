@@ -26,6 +26,7 @@ mod queue;
 mod util;
 mod prebuffer;
 mod file_stream;
+mod radio_stream;
 
 use std::env;
 use std::sync::{Arc, Mutex, mpsc};
