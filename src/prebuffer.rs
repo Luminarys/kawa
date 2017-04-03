@@ -14,10 +14,13 @@ pub struct PreBuffer {
 }
 
 impl PreBuffer {
-    pub fn from_transcode(input: Arc<Vec<u8>>, ext: &str, cfg: &StreamConfig, log: Logger) -> Option<PreBuffer> {
-        let token = Arc::new(AtomicBool::new(false));
+    pub fn from_transcode(input: Arc<RingBuffer<u8>>,
+                          out_buf: Arc<RingBuffer<u8>>,
+                          ext: &str,
+                          token: Arc<AtomicBool>,
+                          cfg: &StreamConfig,
+                          log: Logger) -> Option<PreBuffer> {
         // 500KB Buffer
-        let out_buf = Arc::new(RingBuffer::new(500000));
         let res_ext = match cfg.container {
             shout::ShoutFormat::Ogg => "ogg",
             shout::ShoutFormat::MP3 => "mp3",

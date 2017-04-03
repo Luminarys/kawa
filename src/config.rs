@@ -3,7 +3,8 @@ use shout::ShoutFormat;
 use toml;
 
 use std::sync::Arc;
-use super::util;
+use std::fs::File;
+use std::io::Read;
 
 #[derive(Clone)]
 pub struct Config {
@@ -100,14 +101,16 @@ impl InternalConfig {
                          })
         }
 
+
+        let mut buffer = Vec::new();
+        File::open(&self.queue.fallback).expect("Queue fallback must be present and a vaild file").read_to_end(&mut buffer).expect("IO ERROR!");
         Ok(Config {
                api: self.api,
                radio: self.radio,
                streams: streams,
                queue: QueueConfig {
                     random: self.queue.random,
-                    fallback: util::path_to_data(&self.queue.fallback)
-                                        .expect("Queue fallback must be present and a valid file!"),
+                    fallback: (Arc::new(buffer), self.queue.fallback),
                },
            })
     }

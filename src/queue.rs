@@ -1,9 +1,11 @@
 use std::mem;
 use hyper::client::Client;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool};
 use std::io::Read;
 use config::Config;
 use prebuffer::PreBuffer;
+use ring_buffer::RingBuffer;
 use util;
 use slog::Logger;
 use serde_json as serde;
@@ -82,13 +84,14 @@ impl Queue {
         }
     }
 
-    fn next_buffer(&mut self) -> (Arc<Vec<u8>>, String) {
+    fn next_buffer(&mut self) -> (Arc<RingBuffer<u8>>, String) {
         let mut buf = self.next_queue_buffer();
         let mut tries = 10;
         while buf.is_none() {
             if tries == 0 {
                 warn!(self.log, "Using fallback song!");
-                return self.cfg.queue.fallback.clone();
+                let (ref buf, ref name) = self.cfg.queue.fallback;
+                return (util::data_to_rb(buf.clone()), name.clone());
             }
             buf = self.random_buffer();
             tries -= 1;
@@ -96,11 +99,11 @@ impl Queue {
         buf.unwrap()
     }
 
-    fn next_queue_buffer(&mut self) -> Option<(Arc<Vec<u8>>, String)> {
+    fn next_queue_buffer(&mut self) -> Option<(Arc<RingBuffer<u8>>, String)> {
         while !self.entries.is_empty() {
             {
                 let entry = &self.entries[0];
-                if let Some(r) = util::path_to_data(&entry.path) {
+                if let Some(r) = util::path_to_rb(&entry.path) {
                     info!(self.log, "Using queue entry {:?}", entry.path);
                     return Some(r);
                 }
@@ -110,7 +113,7 @@ impl Queue {
         return None;
     }
 
-    fn random_buffer(&mut self) -> Option<(Arc<Vec<u8>>, String)> {
+    fn random_buffer(&mut self) -> Option<(Arc<RingBuffer<u8>>, String)> {
         let client = Client::new();
 
         let mut body = String::new();
@@ -123,7 +126,7 @@ impl Queue {
             .and_then(|e: QueueEntry| {
                 debug!(self.log, "Attempting to use random buffer from path {:?}", e.path);
                 path = e.path.clone();
-                util::path_to_data(&e.path)
+                util::path_to_rb(&e.path)
             });
         if res.is_some() {
             info!(self.log, "Using random entry {:?}", path);
@@ -132,15 +135,18 @@ impl Queue {
     }
 
     fn initiate_transcode(&mut self) -> Option<Vec<PreBuffer>> {
+        let token = Arc::new(AtomicBool::new(false));
         let (data, ext) = self.next_buffer();
+        let bufs: Vec<_> = self.cfg.streams.iter().map(|_| Arc::new(RingBuffer::new(500000))).collect();
+        util::rb_broadcast(data.clone(), bufs.clone(), token.clone());
         let mut prebufs = Vec::new();
         debug!(self.log, "Attempting to spawn transcoders with ID: {:?}", self.counter);
-        for stream in self.cfg.streams.iter() {
+        for (stream, buf) in self.cfg.streams.iter().zip(bufs) {
             let slog = self.log.new(o!(
                     "Transcoder, mount" => stream.mount.clone(),
                     "QID" => self.counter
             ));
-            if let Some(prebuf) = PreBuffer::from_transcode(data.clone(), &ext, stream, slog) {
+            if let Some(prebuf) = PreBuffer::from_transcode(data.clone(), buf, &ext, token.clone(), stream, slog) {
                 prebufs.push(prebuf);
             } else {
                 // Terminate if any prebuffers fail to create.

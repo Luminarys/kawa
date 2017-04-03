@@ -8,7 +8,10 @@ extern crate hyper;
 extern crate toml;
 extern crate ring_buffer;
 extern crate serde_json;
+extern crate futures_cpupool;
 
+#[macro_use]
+extern crate lazy_static;
 #[macro_use]
 extern crate rustful;
 #[macro_use]
@@ -27,6 +30,13 @@ use std::env;
 use std::sync::{Arc, Mutex, mpsc};
 use std::io::{Read};
 use slog::DrainExt;
+use futures_cpupool::CpuPool;
+
+lazy_static! {
+    pub static ref CPU_POOL: CpuPool = {
+        CpuPool::new(4)
+    };
+}
 
 fn main() {
     let drain = slog_term::streamer().compact().build().fuse();

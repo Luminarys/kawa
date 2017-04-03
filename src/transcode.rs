@@ -32,7 +32,7 @@ impl Drop for Dropper {
     }
 }
 
-pub fn transcode(in_data: Arc<Vec<u8>>,
+pub fn transcode(in_data: Arc<RingBuffer<u8>>,
                  ict: &str,
                  out_data: Arc<RingBuffer<u8>>,
                  oct: &str,
@@ -44,20 +44,20 @@ pub fn transcode(in_data: Arc<Vec<u8>>,
 
     let io_ictx = format::io::Context::new(4096,
                                            false,
-                                           (0usize, in_data.clone()),
-                                           Some(read_packet),
+                                           (in_data.clone(), compl.clone()),
+                                           Some(ff_read),
                                            None,
-                                           Some(seek_packet),
-                                           Some(cleanup_input));
+                                           Some(ff_seek),
+                                           Some(cleanup));
     let mut ictx = try!(format::open_custom_io(io_ictx, true, ict)).input();
 
     let io_octx = format::io::Context::new(4096,
                                            true,
                                            (out_data.clone(), compl.clone()),
                                            None,
-                                           Some(write_packet),
+                                           Some(ff_write),
                                            None,
-                                           Some(cleanup_output));
+                                           Some(cleanup));
     let mut octx = try!(format::open_custom_io(io_octx, false, oct)).output();
 
     let mut transcoder = try!(transcoder(&mut ictx, &mut octx, format, &filter, bitrate));
@@ -205,8 +205,7 @@ macro_rules! cleanup_callback {
     };
 }
 
-cleanup_callback!(cleanup_input, (usize, Arc<Vec<u8>>));
-cleanup_callback!(cleanup_output, (Arc<RingBuffer<u8>>, Arc<AtomicBool>));
+cleanup_callback!(cleanup, (Arc<RingBuffer<u8>>, Arc<AtomicBool>));
 
 // Convenience wrapper to generate callbacks which automatically convert C arguments into
 // specified ones for Rust code.
@@ -239,39 +238,30 @@ fn write_to_buf(&(ref output, ref compl): &(Arc<RingBuffer<u8>>, Arc<AtomicBool>
     buffer.len() as i32
 }
 
-rw_callback!(write_packet, write_to_buf, (Arc<RingBuffer<u8>>, Arc<AtomicBool>));
+rw_callback!(ff_write, write_to_buf, (Arc<RingBuffer<u8>>, Arc<AtomicBool>));
 
-fn read_buf(&mut (ref mut pos, ref input): &mut (usize, Arc<Vec<u8>>), mut buffer: &mut [u8]) -> i32 {
-    let len = buffer.len();
-    if *pos + len < input.len() {
-        if let Ok(r) = buffer.write(&input[*pos..*pos + len]) {
-            *pos += len;
-            r as i32
-        } else {
-            ffmpeg::sys::AVERROR_EXTERNAL
-        }
-    } else if *pos < input.len() {
-        if let Ok(_) = buffer.write(&input[*pos..input.len()]) {
-            ffmpeg::sys::AVERROR_EOF
-        } else {
-            ffmpeg::sys::AVERROR_EXTERNAL
-        }
-    } else {
-        ffmpeg::sys::AVERROR_EOF
+fn read_buf(&mut (ref mut input, ref compl): &mut (Arc<RingBuffer<u8>>, Arc<AtomicBool>),
+            mut buffer: &mut [u8]) -> i32 {
+    if compl.load(Ordering::Acquire) {
+        return ffmpeg::sys::AVERROR_EXIT;
     }
+    let data = input.try_read(buffer.len());
+    let _ = buffer.write(&data);
+    data.len() as i32
 }
 
-rw_callback!(read_packet, read_buf, (usize, Arc<Vec<u8>>));
+rw_callback!(ff_read, read_buf, (Arc<RingBuffer<u8>>, Arc<AtomicBool>));
 
-fn seek_buf(&mut (ref mut pos, ref input): &mut (usize, Arc<Vec<u8>>), offset: i64, whence: i32) -> i64 {
+fn seek_buf(&mut (ref mut input, _): &mut (Arc<RingBuffer<u8>>, Arc<AtomicBool>),
+                                                   offset: i64,
+                                                   whence: i32) -> i64 {
     if whence == ffmpeg::sys::AVSEEK_SIZE {
         return input.len() as i64;
     }
-    *pos = offset as usize;
-    return offset;
+    return 0;
 }
 
-rw_callback!(seek, seek_packet, seek_buf, (usize, Arc<Vec<u8>>));
+rw_callback!(seek, ff_seek, seek_buf, (Arc<RingBuffer<u8>>, Arc<AtomicBool>));
 
 fn filter(spec: &str, decoder: &codec::decoder::Audio, encoder: &codec::encoder::Audio) -> Result<filter::Graph, ffmpeg::Error> {
     let mut filter = filter::Graph::new();
