@@ -3,6 +3,12 @@ name = "kaeru"
 version = "0.1.0"
 authors = ["Luminarys <postmaster@gensok.io>"]
 
+[dependencies.libc]
+version = "0.2"
+
+[dependencies.error-chain]
+version = "0.10"
+
 [dependencies.ffmpeg-sys]
 version = "3.3.2"
 git = "https://github.com/meh/rust-ffmpeg-sys.git"
