@@ -5,7 +5,7 @@ extern crate libc;
 
 pub use sys::AVCodecID;
 
-use std::ffi::CString;
+use std::ffi::{CString, CStr};
 use std::io::{self, Read, Write};
 use std::{slice, ptr};
 use libc::{c_char, c_int, c_void, uint8_t};
@@ -38,13 +38,14 @@ macro_rules! ck_null {
 }
 
 pub struct Graph {
-    graph: *mut sys::AVFilterGraph,
+    graph: GraphP,
+    splitter: *mut sys::AVFilterContext,
     input: GraphInput,
     outputs: Vec<GraphOutput>,
 }
 
 pub struct GraphBuilder {
-    graph: *mut sys::AVFilterGraph,
+    graph: GraphP,
     input: GraphInput,
     outputs: Vec<GraphOutput>,
 }
@@ -73,16 +74,30 @@ pub struct Output {
     _opaque: Opaque,
 }
 
+struct Opaque {
+    ptr: *mut c_void,
+    cleanup: fn(*mut c_void),
+}
+
+struct GraphP {
+    ptr: *mut sys::AVFilterGraph,
+}
+
 impl GraphBuilder {
     pub fn new(input: Input) -> Result<GraphBuilder> {
         unsafe {
             let graph = sys::avfilter_graph_alloc();
             ck_null!(graph);
             let buffersrc = sys::avfilter_get_by_name(str_conv!("abuffer"));
+            ck_null!(buffersrc);
             let buffersrc_ctx = sys::avfilter_graph_alloc_filter(graph, buffersrc, str_conv!("in"));
             ck_null!(buffersrc_ctx);
+            let time_base = (*input.stream).time_base;
+            let sample_fmt = CStr::from_ptr(sys::av_get_sample_fmt_name((*input.codec_ctx).sample_fmt))
+                .to_str().chain_err(|| "failed to parse format!")?;
             let args = format!("time_base={}/{}:sample_rate={}:sample_fmt={},channel_layout=0x{}",
-                               1,1,1,1,1);
+                               time_base.num, time_base.den, (*input.codec_ctx).sample_rate,
+                               sample_fmt, (*input.codec_ctx).channel_layout);
 
             match sys::avfilter_init_str(buffersrc_ctx, str_conv!(&args[..])) {
                 0 => { }
@@ -95,7 +110,81 @@ impl GraphBuilder {
                     ctx: buffersrc_ctx,
                 },
                 outputs: Vec::new(),
-                graph,
+                graph: GraphP { ptr: graph },
+            })
+        }
+    }
+
+    pub fn add_output(&mut self, output: Output) -> Result<&mut Self> {
+        let id = format!("out{}", self.outputs.len());
+        unsafe {
+            // Configure the encoder based on the decoder
+            let ref input = self.input.input;
+            (*output.codec_ctx).sample_rate = (*input.codec_ctx).sample_rate;
+            (*output.codec_ctx).channel_layout = (*input.codec_ctx).channel_layout;
+            (*output.codec_ctx).channels = sys::av_get_channel_layout_nb_channels((*input.codec_ctx).channel_layout);
+            let time_base = sys::AVRational {
+                num: 1,
+                den: (*output.codec_ctx).sample_rate,
+            };
+            (*output.codec_ctx).time_base = time_base;
+
+            // Create and configure the sink filter
+            let buffersink = sys::avfilter_get_by_name(str_conv!("abuffersink"));
+            ck_null!(buffersink);
+            let buffersink_ctx = sys::avfilter_graph_alloc_filter(self.graph.ptr, buffersink, str_conv!(&id[..]));
+            ck_null!(buffersink_ctx);
+
+            let sample_fmt = CStr::from_ptr(sys::av_get_sample_fmt_name((*output.codec_ctx).sample_fmt))
+                .to_str().chain_err(|| "failed to parse format!")?;
+            let args = format!("time_base={}/{}:sample_rate={}:sample_fmt={},channel_layout=0x{}",
+                               time_base.num, time_base.den, (*output.codec_ctx).sample_rate,
+                               sample_fmt, (*output.codec_ctx).channel_layout);
+            match sys::avfilter_init_str(buffersink_ctx, str_conv!(&args[..])) {
+                0 => { }
+                e => return Err(ErrorKind::FFmpeg("failed to initialize buffersink", e).into()),
+            }
+            self.outputs.push(GraphOutput {
+                output,
+                ctx: buffersink_ctx,
+            });
+        }
+        Ok(self)
+    }
+
+    pub fn build(self) -> Result<Graph> {
+        unsafe {
+            // Create the audio split filter and wire it up
+            let asplit = sys::avfilter_get_by_name(str_conv!("asplit"));
+            ck_null!(asplit);
+            let asplit_ctx = sys::avfilter_graph_alloc_filter(self.graph.ptr, asplit, str_conv!("splitter"));
+            ck_null!(asplit_ctx);
+            match sys::avfilter_init_str(asplit_ctx, ptr::null()) {
+                0 => { }
+                e => return Err(ErrorKind::FFmpeg("failed to initialize asplit", e).into()),
+            }
+            match sys::avfilter_link(self.input.ctx, 0, asplit_ctx, 0) {
+                0 => { }
+                e => return Err(ErrorKind::FFmpeg("failed to link input to asplit", e).into()),
+            }
+            for (i, output) in self.outputs.iter().enumerate() {
+                match sys::avfilter_link(asplit_ctx, i as u32, output.ctx, 0) {
+                    0 => { }
+                    e => return Err(ErrorKind::FFmpeg("failed to link input to asplit", e).into()),
+                }
+            }
+
+            // validate the graph
+            match sys::avfilter_graph_config(self.graph.ptr, ptr::null_mut()) {
+                0 => { }
+                e => return Err(ErrorKind::FFmpeg("failed to configure the filtergraph", e).into()),
+            }
+
+            Ok(Graph {
+                graph: self.graph,
+                input: self.input,
+                outputs: self.outputs,
+                splitter: asplit_ctx,
             })
         }
     }
@@ -142,12 +231,19 @@ impl Input {
             let codec_ctx = sys::avcodec_alloc_context3(codec);
             ck_null!(codec_ctx);
             let stream = *(*ctx).streams.offset(stream_idx as isize);
-            sys::avcodec_parameters_to_context(codec_ctx, (*stream).codecpar);
-            sys::av_opt_set_int(codec_ctx as *mut c_void, str_conv!("refcounted_frames"), 1, 0);
+            match sys::avcodec_parameters_to_context(codec_ctx, (*stream).codecpar) {
+                0 => { },
+                e => return Err(ErrorKind::FFmpeg("failed to configure codec", e).into()),
+            }
+            match sys::av_opt_set_int(codec_ctx as *mut c_void, str_conv!("refcounted_frames"), 1, 0) {
+                0 => { },
+                e => return Err(ErrorKind::FFmpeg("failed to configure codec", e).into()),
+            }
             match sys::avcodec_open2(codec_ctx, codec, ptr::null_mut()) {
                 0 => { }
                 e => return Err(ErrorKind::FFmpeg("failed to open audio decoder", e).into()),
             }
+
             Ok(Input {
                 ctx,
                 codec_ctx,
@@ -168,7 +264,7 @@ impl Drop for Input {
 }
 
 impl Output {
-    pub fn new<T: Write + Send + Sized + 'static>(t: T, container: &str, codec_id: sys::AVCodecID) -> Result<Output> {
+    pub fn new<T: Write + Send + Sized + 'static>(t: T, container: &str, codec_id: sys::AVCodecID, bit_rate: usize) -> Result<Output> {
         unsafe {
             let buffer = sys::av_malloc(4096) as *mut u8;
             ck_null!(buffer);
@@ -190,6 +286,8 @@ impl Output {
             }
             let codec_ctx = sys::avcodec_alloc_context3(codec);
             ck_null!(codec_ctx);
+            (*codec_ctx).bit_rate = bit_rate as i64;
+            (*codec_ctx).sample_fmt = *(*codec).sample_fmts;
             let stream = sys::avformat_new_stream(ctx, codec);
             ck_null!(stream);
 
@@ -241,9 +339,12 @@ unsafe extern fn write_cb<T: Write + Sized>(opaque: *mut c_void, buf: *mut uint8
     }
 }
 
-struct Opaque {
-    ptr: *mut c_void,
-    cleanup: fn(*mut c_void),
+impl Drop for GraphP {
+    fn drop(&mut self) {
+        unsafe {
+            sys::avfilter_graph_free(&mut self.ptr);
+        }
+    }
 }
 
 impl Opaque {
