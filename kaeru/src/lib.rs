@@ -6,6 +6,7 @@ extern crate libc;
 pub use sys::AVCodecID;
 
 use std::ffi::{CString, CStr};
+use std::mem;
 use std::io::{self, Read, Write};
 use std::{slice, ptr};
 use libc::{c_char, c_int, c_void, uint8_t};
@@ -95,7 +96,7 @@ impl GraphBuilder {
             let time_base = (*input.stream).time_base;
             let sample_fmt = CStr::from_ptr(sys::av_get_sample_fmt_name((*input.codec_ctx).sample_fmt))
                 .to_str().chain_err(|| "failed to parse format!")?;
-            let args = format!("time_base={}/{}:sample_rate={}:sample_fmt={},channel_layout=0x{}",
+            let args = format!("time_base={}/{}:sample_rate={}:sample_fmt={}:channel_layout=0x{}",
                                time_base.num, time_base.den, (*input.codec_ctx).sample_rate,
                                sample_fmt, (*input.codec_ctx).channel_layout);
 
@@ -135,12 +136,22 @@ impl GraphBuilder {
             let buffersink_ctx = sys::avfilter_graph_alloc_filter(self.graph.ptr, buffersink, str_conv!(&id[..]));
             ck_null!(buffersink_ctx);
 
-            let sample_fmt = CStr::from_ptr(sys::av_get_sample_fmt_name((*output.codec_ctx).sample_fmt))
-                .to_str().chain_err(|| "failed to parse format!")?;
-            let args = format!("time_base={}/{}:sample_rate={}:sample_fmt={},channel_layout=0x{}",
-                               time_base.num, time_base.den, (*output.codec_ctx).sample_rate,
-                               sample_fmt, (*output.codec_ctx).channel_layout);
-            match sys::avfilter_init_str(buffersink_ctx, str_conv!(&args[..])) {
+            match sys::av_opt_set_bin(buffersink_ctx as *mut c_void, str_conv!("sample_rates"), mem::transmute(&(*output.codec_ctx).sample_rate),
+                mem::size_of_val(&(*output.codec_ctx).sample_rate) as c_int, sys::AV_OPT_SEARCH_CHILDREN) {
+                0 => { }
+                e => return Err(ErrorKind::FFmpeg("failed to configure buffersink sample_rates", e).into()),
+            }
+            match sys::av_opt_set_bin(buffersink_ctx as *mut c_void, str_conv!("sample_fmts"), mem::transmute(&(*output.codec_ctx).sample_fmt),
+                mem::size_of_val(&(*output.codec_ctx).sample_fmt) as c_int, sys::AV_OPT_SEARCH_CHILDREN) {
+                0 => { }
+                e => return Err(ErrorKind::FFmpeg("failed to configure buffersink sample_fmts", e).into()),
+            }
+            match sys::av_opt_set_bin(buffersink_ctx as *mut c_void, str_conv!("channel_layouts"), mem::transmute(&(*output.codec_ctx).channel_layout),
+                mem::size_of_val(&(*output.codec_ctx).channel_layout) as c_int, sys::AV_OPT_SEARCH_CHILDREN) {
+                0 => { }
+                e => return Err(ErrorKind::FFmpeg("failed to configure buffersink sample_fmts", e).into()),
+            }
+            match sys::avfilter_init_str(buffersink_ctx, ptr::null()) {
                 0 => { }
                 e => return Err(ErrorKind::FFmpeg("failed to initialize buffersink", e).into()),
             }
@@ -167,6 +178,8 @@ impl GraphBuilder {
                 0 => { }
                 e => return Err(ErrorKind::FFmpeg("failed to link input to asplit", e).into()),
             }
+            (*asplit_ctx).nb_outputs = self.outputs.len() as u32;
+
             for (i, output) in self.outputs.iter().enumerate() {
                 match sys::avfilter_link(asplit_ctx, i as u32, output.ctx, 0) {
                     0 => { }
@@ -269,7 +282,7 @@ impl Output {
             let buffer = sys::av_malloc(4096) as *mut u8;
             ck_null!(buffer);
             let opaque = Opaque::new(t);
-            let io_ctx = sys::avio_alloc_context(buffer, 4096, 0, opaque.ptr, None, Some(write_cb::<T>), None);
+            let io_ctx = sys::avio_alloc_context(buffer, 4096, 1, opaque.ptr, None, Some(write_cb::<T>), None);
             ck_null!(io_ctx);
 
             let mut ps = sys::avformat_alloc_context();
@@ -386,3 +399,43 @@ fn get_error(code: c_int) -> String {
     }
 }
 
+pub fn init() {
+    unsafe {
+        sys::av_register_all();
+        sys::avfilter_register_all();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Graph, GraphBuilder, Input, Output, init};
+    use std::fs::File;
+
+    #[test]
+    fn test_instantiate_input() {
+        init();
+        let f = File::open("test/test.mp3").unwrap();
+        let i = Input::new(f, "mp3").unwrap();
+    }
+
+    #[test]
+    fn test_instantiate_output() {
+        init();
+        let d = vec![0u8; 1024 * 16];
+        Output::new(d, "ogg", super::sys::AVCodecID::AV_CODEC_ID_VORBIS, 192).unwrap();
+    }
+
+    #[test]
+    fn test_instantiate_graph() {
+        init();
+        let fin = File::open("test/test.mp3").unwrap();
+        let fout1 = File::create("test/test.ogg").unwrap();
+        let fout2 = File::create("test/test2.ogg").unwrap();
+        let i = Input::new(fin, "mp3").unwrap();
+        let o1 = Output::new(fout1, "ogg", super::sys::AVCodecID::AV_CODEC_ID_VORBIS, 192).unwrap();
+        let o2 = Output::new(fout2, "ogg", super::sys::AVCodecID::AV_CODEC_ID_OPUS, 192).unwrap();
+        let mut gb = GraphBuilder::new(i).unwrap();
+        gb.add_output(o1).unwrap().add_output(o2).unwrap();
+        let g = gb.build().unwrap();
+    }
+}
