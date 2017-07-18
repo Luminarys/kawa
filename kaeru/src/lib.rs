@@ -587,14 +587,14 @@ pub fn init() {
 
 #[cfg(test)]
 mod tests {
-    use super::{Graph, GraphBuilder, Input, Output, init};
+    use super::{GraphBuilder, Input, Output, init, Result};
     use std::fs::File;
 
     #[test]
     fn test_instantiate_input() {
         init();
         let f = File::open("test/test.mp3").unwrap();
-        let i = Input::new(f, "mp3").unwrap();
+        Input::new(f, "mp3").unwrap();
     }
 
     #[test]
@@ -607,15 +607,19 @@ mod tests {
     #[test]
     fn test_run_graph() {
         init();
+        run_graph().unwrap();
+    }
+
+    fn run_graph() -> Result<()> {
         let fin = File::open("test/test.mp3").unwrap();
         let fout1 = File::create("test/test.ogg").unwrap();
         let fout2 = File::create("test/test2.ogg").unwrap();
-        let i = Input::new(fin, "mp3").unwrap();
-        let o1 = Output::new(fout1, "ogg", super::sys::AVCodecID::AV_CODEC_ID_OPUS, 192).unwrap();
-        let o2 = Output::new(fout2, "ogg", super::sys::AVCodecID::AV_CODEC_ID_VORBIS, 192).unwrap();
-        let mut gb = GraphBuilder::new(i).unwrap();
-        gb.add_output(o1).unwrap().add_output(o2).unwrap();
-        let g = gb.build().unwrap();
-        g.run().unwrap();
+
+        let i = Input::new(fin, "mp3")?;
+        let o1 = Output::new(fout1, "ogg", super::sys::AVCodecID::AV_CODEC_ID_OPUS, 192)?;
+        let o2 = Output::new(fout2, "ogg", super::sys::AVCodecID::AV_CODEC_ID_VORBIS, 192)?;
+        let mut gb = GraphBuilder::new(i)?;
+        gb.add_output(o1)?.add_output(o2)?;
+        gb.build()?.run()
     }
 }
