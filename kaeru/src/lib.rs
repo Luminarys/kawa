@@ -149,7 +149,7 @@ impl GraphBuilder {
             match sys::av_opt_set_bin(buffersink_ctx as *mut c_void, str_conv!("channel_layouts"), mem::transmute(&(*output.codec_ctx).channel_layout),
                 mem::size_of_val(&(*output.codec_ctx).channel_layout) as c_int, sys::AV_OPT_SEARCH_CHILDREN) {
                 0 => { }
-                e => return Err(ErrorKind::FFmpeg("failed to configure buffersink sample_fmts", e).into()),
+                e => return Err(ErrorKind::FFmpeg("failed to configure buffersink channel_layouts", e).into()),
             }
             match sys::avfilter_init_str(buffersink_ctx, ptr::null()) {
                 0 => { }
