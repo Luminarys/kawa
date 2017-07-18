@@ -39,10 +39,12 @@ macro_rules! ck_null {
 }
 
 pub struct Graph {
+    #[allow(dead_code)] // The graph needs to be kept as context for the filters
     graph: GraphP,
+    #[allow(dead_code)]
+    splitter: *mut sys::AVFilterContext, // We don't actually need this, but it's nice to have
     in_frame: *mut sys::AVFrame,
     out_frame: *mut sys::AVFrame,
-    splitter: *mut sys::AVFilterContext,
     input: GraphInput,
     outputs: Vec<GraphOutput>,
 }
@@ -77,6 +79,12 @@ pub struct Output {
     _opaque: Opaque,
 }
 
+struct Frames<'a> {
+    i: &'a Input,
+    frame: *mut sys::AVFrame,
+    packet: sys::AVPacket,
+}
+
 struct Opaque {
     ptr: *mut c_void,
     cleanup: fn(*mut c_void),
@@ -97,36 +105,9 @@ impl Graph {
                 }
             }
 
-            let mut in_pkt: sys::AVPacket = mem::uninitialized();
-            in_pkt.data = ptr::null_mut();
-
-            let ictx = self.input.input.ctx;
-            let dec_ctx = self.input.input.codec_ctx;
-
-            let mut err = None;
-
-            'read_packet: while sys::av_read_frame(ictx, &mut in_pkt) == 0 {
-                sys::av_packet_rescale_ts(&mut in_pkt,
-                                            (*self.input.input.stream).time_base,
-                                            (*self.input.input.codec_ctx).time_base);
-                match sys::avcodec_send_packet(dec_ctx, &in_pkt) {
-                    0 => { }
-                    e if e == sys::AVERROR_EOF => { break }
-                    e  => { err = Some(ErrorKind::FFmpeg("failed to decode packet", e).into()); break }
-                }
-
-                'get_frame: loop {
-                    match sys::avcodec_receive_frame(dec_ctx, self.in_frame) {
-                        0 => { let f = self.in_frame; self.process_frame(f)?; },
-                        e if e == sys::AVERROR(libc::EAGAIN) => { break }
-                        e  => { err = Some(ErrorKind::FFmpeg("failed to receive frame", e).into()); break 'read_packet }
-                    }
-                }
-                sys::av_packet_unref(&mut in_pkt);
-            }
-
-            if let Some(e) = err {
-                return Err(e);
+            for res in self.input.input.read_frames(self.in_frame) {
+                res?;
+                self.process_frame(self.in_frame)?;
             }
 
             // Flush everything
@@ -146,7 +127,7 @@ impl Graph {
         Ok(())
     }
 
-    unsafe fn process_frame(&mut self, frame: *mut sys::AVFrame) -> Result<()> {
+    unsafe fn process_frame(&self, frame: *mut sys::AVFrame) -> Result<()> {
         // Push the frame into the graph source
         match sys::av_buffersrc_add_frame(self.input.ctx, frame) {
             0 => { }
@@ -155,7 +136,7 @@ impl Graph {
 
         // Pull out frames from each graph sink, sends them into the codecs for encoding, then
         // writes out the received packets
-        for output in self.outputs.iter_mut() {
+        for output in self.outputs.iter() {
             loop {
                 match sys::av_buffersink_get_frame(output.ctx, self.out_frame) {
                     0 => { }
@@ -386,6 +367,16 @@ impl Input {
             })
         }
     }
+
+    unsafe fn read_frames(&self, frame: *mut sys::AVFrame) -> Frames {
+        let mut packet: sys::AVPacket = mem::uninitialized();
+        packet.data = ptr::null_mut();
+        Frames {
+            frame,
+            packet,
+            i: self
+        }
+    }
 }
 
 impl Drop for Input {
@@ -435,7 +426,7 @@ impl Output {
         }
     }
 
-    unsafe fn write_frame(&mut self, frame: *mut sys::AVFrame) -> Result<()> {
+    unsafe fn write_frame(&self, frame: *mut sys::AVFrame) -> Result<()> {
         let mut out_pkt: sys::AVPacket = mem::uninitialized();
         out_pkt.data = ptr::null_mut();
         out_pkt.size = 0;
@@ -472,6 +463,40 @@ impl Drop for Output {
             sys::av_free((*self.ctx).pb as *mut c_void);
             sys::avformat_free_context(self.ctx);
             sys::avcodec_free_context(&mut self.codec_ctx);
+        }
+    }
+}
+
+impl<'a> Iterator for Frames<'a> {
+    type Item = Result<()>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        unsafe {
+            // Try to get a frame, if not try to read packets and decode them
+            match sys::avcodec_receive_frame(self.i.codec_ctx, self.frame) {
+                0 => { return Some(Ok(())); },
+                e if e == sys::AVERROR(libc::EAGAIN) => { }
+                e if e == sys::AVERROR_EOF => { return None; }
+                e  => { return Some(Err(ErrorKind::FFmpeg("failed to receive frame", e).into())); }
+            }
+
+            match sys::av_read_frame(self.i.ctx, &mut self.packet) {
+                0 => { }
+                e if e == sys::AVERROR_EOF => { return None; }
+                e  => { return Some(Err(ErrorKind::FFmpeg("failed to read frame", e).into())); }
+            }
+
+            sys::av_packet_rescale_ts(&mut self.packet,
+                (*self.i.stream).time_base,
+                (*self.i.codec_ctx).time_base);
+
+            match sys::avcodec_send_packet(self.i.codec_ctx, &self.packet) {
+                0 => { }
+                e if e == sys::AVERROR_EOF => { return None; }
+                e  => { return Some(Err(ErrorKind::FFmpeg("failed to decode packet", e).into())); }
+            }
+            sys::av_packet_unref(&mut self.packet);
+            self.next()
         }
     }
 }
