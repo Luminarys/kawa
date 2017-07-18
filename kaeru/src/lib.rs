@@ -40,6 +40,8 @@ macro_rules! ck_null {
 
 pub struct Graph {
     graph: GraphP,
+    in_frame: *mut sys::AVFrame,
+    out_frame: *mut sys::AVFrame,
     splitter: *mut sys::AVFilterContext,
     input: GraphInput,
     outputs: Vec<GraphOutput>,
@@ -84,6 +86,104 @@ struct GraphP {
     ptr: *mut sys::AVFilterGraph,
 }
 
+impl Graph {
+    pub fn run(mut self) -> Result<()> {
+        unsafe {
+            // Write header
+            for o in self.outputs.iter() {
+                match sys::avformat_write_header(o.output.ctx, ptr::null_mut()) {
+                    0 => { }
+                    e => return Err(ErrorKind::FFmpeg("failed to write header", e).into()),
+                }
+            }
+
+            let mut in_pkt: sys::AVPacket = mem::uninitialized();
+            in_pkt.data = ptr::null_mut();
+
+            let ictx = self.input.input.ctx;
+            let dec_ctx = self.input.input.codec_ctx;
+
+            let mut err = None;
+
+            'read_packet: while sys::av_read_frame(ictx, &mut in_pkt) == 0 {
+                sys::av_packet_rescale_ts(&mut in_pkt,
+                                            (*self.input.input.stream).time_base,
+                                            (*self.input.input.codec_ctx).time_base);
+                match sys::avcodec_send_packet(dec_ctx, &in_pkt) {
+                    0 => { }
+                    e if e == sys::AVERROR_EOF => { break }
+                    e  => { err = Some(ErrorKind::FFmpeg("failed to decode packet", e).into()); break }
+                }
+
+                'get_frame: loop {
+                    match sys::avcodec_receive_frame(dec_ctx, self.in_frame) {
+                        0 => { let f = self.in_frame; self.process_frame(f)?; },
+                        e if e == sys::AVERROR(libc::EAGAIN) => { break }
+                        e  => { err = Some(ErrorKind::FFmpeg("failed to receive frame", e).into()); break 'read_packet }
+                    }
+                }
+                sys::av_packet_unref(&mut in_pkt);
+            }
+
+            if let Some(e) = err {
+                return Err(e);
+            }
+
+            // Flush everything
+            self.process_frame(ptr::null_mut())?;
+            for o in self.outputs.iter_mut() {
+                o.output.write_frame(ptr::null_mut())?;
+            }
+
+            // Write trailers
+            for o in self.outputs.iter() {
+                match sys::av_write_trailer(o.output.ctx) {
+                    0 => { }
+                    e => return Err(ErrorKind::FFmpeg("failed to write trailer", e).into()),
+                }
+            }
+        }
+        Ok(())
+    }
+
+    unsafe fn process_frame(&mut self, frame: *mut sys::AVFrame) -> Result<()> {
+        // Push the frame into the graph source
+        match sys::av_buffersrc_add_frame(self.input.ctx, frame) {
+            0 => { }
+            e => return Err(ErrorKind::FFmpeg("failed to add frame to source", e).into()),
+        }
+
+        // Pull out frames from each graph sink, sends them into the codecs for encoding, then
+        // writes out the received packets
+        for output in self.outputs.iter_mut() {
+            loop {
+                match sys::av_buffersink_get_frame(output.ctx, self.out_frame) {
+                    0 => { }
+                    e if e == sys::AVERROR(libc::EAGAIN) => { break }
+                    e if e == sys::AVERROR_EOF => { break }
+                    e => return Err(ErrorKind::FFmpeg("failed to get frame from sink", e).into()),
+                }
+
+                // Adjust the timestamp(for some reason they're wonky, prob due to frame size resampling
+                // stuff)
+                let pts = sys::av_frame_get_best_effort_timestamp(self.out_frame);
+                (*self.out_frame).pts = pts;
+                output.output.write_frame(self.out_frame)?;
+            }
+        }
+        Ok(())
+    }
+}
+
+impl Drop for Graph {
+    fn drop(&mut self) {
+        unsafe {
+            sys::av_frame_free(&mut self.in_frame);
+            sys::av_frame_free(&mut self.out_frame);
+        }
+    }
+}
+
 impl GraphBuilder {
     pub fn new(input: Input) -> Result<GraphBuilder> {
         unsafe {
@@ -119,9 +219,14 @@ impl GraphBuilder {
     pub fn add_output(&mut self, output: Output) -> Result<&mut Self> {
         let id = format!("out{}", self.outputs.len());
         unsafe {
-            // Configure the encoder based on the decoder
+            // Configure the encoder based on the decoder, then initialize it
             let ref input = self.input.input;
-            (*output.codec_ctx).sample_rate = (*input.codec_ctx).sample_rate;
+            // OPUS only supports 48kHz sample rates
+            if (*output.codec_ctx).codec_id == sys::AVCodecID::AV_CODEC_ID_OPUS {
+                (*output.codec_ctx).sample_rate = 48000;
+            } else {
+                (*output.codec_ctx).sample_rate = (*input.codec_ctx).sample_rate;
+            }
             (*output.codec_ctx).channel_layout = (*input.codec_ctx).channel_layout;
             (*output.codec_ctx).channels = sys::av_get_channel_layout_nb_channels((*input.codec_ctx).channel_layout);
             let time_base = sys::AVRational {
@@ -129,6 +234,15 @@ impl GraphBuilder {
                 den: (*output.codec_ctx).sample_rate,
             };
             (*output.codec_ctx).time_base = time_base;
+            (*output.stream).time_base = time_base;
+            match sys::avcodec_open2(output.codec_ctx, (*output.codec_ctx).codec, ptr::null_mut()) {
+                0 => { }
+                e => return Err(ErrorKind::FFmpeg("failed to open audio decoder", e).into()),
+            }
+            match sys::avcodec_parameters_from_context((*output.stream).codecpar, output.codec_ctx) {
+                0 => { },
+                e => return Err(ErrorKind::FFmpeg("failed to configure output stream", e).into()),
+            }
 
             // Create and configure the sink filter
             let buffersink = sys::avfilter_get_by_name(str_conv!("abuffersink"));
@@ -193,9 +307,16 @@ impl GraphBuilder {
                 e => return Err(ErrorKind::FFmpeg("failed to configure the filtergraph", e).into()),
             }
 
+            // Align frame sizes on the buffersinks
+            for o in self.outputs.iter() {
+                sys::av_buffersink_set_frame_size(o.ctx, (*o.output.codec_ctx).frame_size as u32);
+            }
+
             Ok(Graph {
                 graph: self.graph,
                 input: self.input,
+                in_frame: sys::av_frame_alloc(),
+                out_frame: sys::av_frame_alloc(),
                 outputs: self.outputs,
                 splitter: asplit_ctx,
             })
@@ -244,13 +365,13 @@ impl Input {
             let codec_ctx = sys::avcodec_alloc_context3(codec);
             ck_null!(codec_ctx);
             let stream = *(*ctx).streams.offset(stream_idx as isize);
-            match sys::avcodec_parameters_to_context(codec_ctx, (*stream).codecpar) {
-                0 => { },
-                e => return Err(ErrorKind::FFmpeg("failed to configure codec", e).into()),
-            }
             match sys::av_opt_set_int(codec_ctx as *mut c_void, str_conv!("refcounted_frames"), 1, 0) {
                 0 => { },
                 e => return Err(ErrorKind::FFmpeg("failed to configure codec", e).into()),
+            }
+            match sys::avcodec_parameters_to_context(codec_ctx, (*stream).codecpar) {
+                0 => { },
+                e => return Err(ErrorKind::FFmpeg("failed to configure output stream", e).into()),
             }
             match sys::avcodec_open2(codec_ctx, codec, ptr::null_mut()) {
                 0 => { }
@@ -287,12 +408,12 @@ impl Output {
             let io_ctx = sys::avio_alloc_context(buffer, 4096, 1, opaque.ptr, None, Some(write_cb::<T>), None);
             ck_null!(io_ctx);
 
-            let mut ps = ptr::null_mut();
-            let ctx = match sys::avformat_alloc_output_context2(&mut ps, ptr::null_mut(), str_conv!(container), ptr::null()) {
-                0 => ps,
+            let mut ctx = ptr::null_mut();
+            match sys::avformat_alloc_output_context2(&mut ctx, ptr::null_mut(), str_conv!(container), ptr::null()) {
+                0 => { },
                 e => return Err(ErrorKind::FFmpeg("failed to open output context", e).into()),
             };
-            (*ps).pb = io_ctx;
+            (*ctx).pb = io_ctx;
 
             let codec = sys::avcodec_find_encoder(codec_id);
             if codec.is_null() {
@@ -300,7 +421,7 @@ impl Output {
             }
             let codec_ctx = sys::avcodec_alloc_context3(codec);
             ck_null!(codec_ctx);
-            (*codec_ctx).bit_rate = bit_rate as i64;
+            (*codec_ctx).bit_rate = bit_rate as i64 * 1000;
             (*codec_ctx).sample_fmt = *(*codec).sample_fmts;
             let stream = sys::avformat_new_stream(ctx, codec);
             ck_null!(stream);
@@ -312,6 +433,35 @@ impl Output {
                 stream,
             })
         }
+    }
+
+    unsafe fn write_frame(&mut self, frame: *mut sys::AVFrame) -> Result<()> {
+        let mut out_pkt: sys::AVPacket = mem::uninitialized();
+        out_pkt.data = ptr::null_mut();
+        out_pkt.size = 0;
+        sys::av_init_packet(&mut out_pkt);
+        match sys::avcodec_send_frame(self.codec_ctx, frame) {
+            0 => { }
+            e => return Err(ErrorKind::FFmpeg("failed to send frame to encoder", e).into()),
+        }
+        loop {
+            match sys::avcodec_receive_packet(self.codec_ctx, &mut out_pkt) {
+                0 => { }
+                e if e == sys::AVERROR(libc::EAGAIN) => { break }
+                e if e == sys::AVERROR_EOF => { break }
+                e => return Err(ErrorKind::FFmpeg("failed to get packet from encoder", e).into()),
+            }
+
+            out_pkt.stream_index = 0;
+            sys::av_packet_rescale_ts(&mut out_pkt,
+                                      (*self.codec_ctx).time_base,
+                                      (*self.stream).time_base);
+            match sys::av_interleaved_write_frame(self.ctx, &mut out_pkt) {
+                0 => { }
+                e => return Err(ErrorKind::FFmpeg("failed to write packet", e).into()),
+            }
+        }
+        Ok(())
     }
 }
 
@@ -430,14 +580,17 @@ mod tests {
     }
 
     #[test]
-    fn test_instantiate_graph() {
+    fn test_run_graph() {
         init();
         let fin = File::open("test/test.mp3").unwrap();
         let fout1 = File::create("test/test.ogg").unwrap();
+        let fout2 = File::create("test/test2.ogg").unwrap();
         let i = Input::new(fin, "mp3").unwrap();
-        let o1 = Output::new(fout1, "ogg", super::sys::AVCodecID::AV_CODEC_ID_VORBIS, 192).unwrap();
+        let o1 = Output::new(fout1, "ogg", super::sys::AVCodecID::AV_CODEC_ID_OPUS, 192).unwrap();
+        let o2 = Output::new(fout2, "ogg", super::sys::AVCodecID::AV_CODEC_ID_VORBIS, 192).unwrap();
         let mut gb = GraphBuilder::new(i).unwrap();
-        gb.add_output(o1).unwrap();
+        gb.add_output(o1).unwrap().add_output(o2).unwrap();
         let g = gb.build().unwrap();
+        g.run().unwrap();
     }
 }
