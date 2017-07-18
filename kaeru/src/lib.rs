@@ -270,6 +270,8 @@ impl Input {
 impl Drop for Input {
     fn drop(&mut self) {
         unsafe {
+            sys::av_free((*(*self.ctx).pb).buffer as *mut c_void);
+            sys::av_free((*self.ctx).pb as *mut c_void);
             sys::avformat_free_context(self.ctx);
             sys::avcodec_free_context(&mut self.codec_ctx);
         }
@@ -285,8 +287,7 @@ impl Output {
             let io_ctx = sys::avio_alloc_context(buffer, 4096, 1, opaque.ptr, None, Some(write_cb::<T>), None);
             ck_null!(io_ctx);
 
-            let mut ps = sys::avformat_alloc_context();
-            ck_null!(ps);
+            let mut ps = ptr::null_mut();
             let ctx = match sys::avformat_alloc_output_context2(&mut ps, ptr::null_mut(), str_conv!(container), ptr::null()) {
                 0 => ps,
                 e => return Err(ErrorKind::FFmpeg("failed to open output context", e).into()),
@@ -317,7 +318,10 @@ impl Output {
 impl Drop for Output {
     fn drop(&mut self) {
         unsafe {
+            sys::av_free((*(*self.ctx).pb).buffer as *mut c_void);
+            sys::av_free((*self.ctx).pb as *mut c_void);
             sys::avformat_free_context(self.ctx);
+            sys::avcodec_free_context(&mut self.codec_ctx);
         }
     }
 }
@@ -430,12 +434,10 @@ mod tests {
         init();
         let fin = File::open("test/test.mp3").unwrap();
         let fout1 = File::create("test/test.ogg").unwrap();
-        let fout2 = File::create("test/test2.ogg").unwrap();
         let i = Input::new(fin, "mp3").unwrap();
         let o1 = Output::new(fout1, "ogg", super::sys::AVCodecID::AV_CODEC_ID_VORBIS, 192).unwrap();
-        let o2 = Output::new(fout2, "ogg", super::sys::AVCodecID::AV_CODEC_ID_OPUS, 192).unwrap();
         let mut gb = GraphBuilder::new(i).unwrap();
-        gb.add_output(o1).unwrap().add_output(o2).unwrap();
+        gb.add_output(o1).unwrap();
         let g = gb.build().unwrap();
     }
 }
