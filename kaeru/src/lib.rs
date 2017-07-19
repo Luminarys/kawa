@@ -129,9 +129,9 @@ impl Graph {
 
     unsafe fn process_frame(&self, frame: *mut sys::AVFrame) -> Result<()> {
         // Push the frame into the graph source
-        match sys::av_buffersrc_add_frame(self.input.ctx, frame) {
+        match sys::av_buffersrc_add_frame_flags(self.input.ctx, frame, sys::AV_BUFFERSRC_FLAG_KEEP_REF as i32) {
             0 => { }
-            e => return Err(ErrorKind::FFmpeg("failed to add frame to source", e).into()),
+            e => return Err(ErrorKind::FFmpeg("failed to add frame to graph source", e).into()),
         }
 
         // Pull out frames from each graph sink, sends them into the codecs for encoding, then
@@ -142,16 +142,16 @@ impl Graph {
                     0 => { }
                     e if e == sys::AVERROR(libc::EAGAIN) => { break }
                     e if e == sys::AVERROR_EOF => { break }
-                    e => return Err(ErrorKind::FFmpeg("failed to get frame from sink", e).into()),
+                    e => return Err(ErrorKind::FFmpeg("failed to get frame from graph sink", e).into()),
                 }
 
                 // Adjust the timestamp(for some reason they're wonky, prob due to frame size resampling
                 // stuff)
-                let pts = sys::av_frame_get_best_effort_timestamp(self.out_frame);
-                (*self.out_frame).pts = pts;
                 output.output.write_frame(self.out_frame)?;
+                sys::av_frame_unref(self.out_frame);
             }
         }
+        sys::av_frame_unref(frame);
         Ok(())
     }
 }
@@ -485,10 +485,6 @@ impl<'a> Iterator for Frames<'a> {
                 e if e == sys::AVERROR_EOF => { return None; }
                 e  => { return Some(Err(ErrorKind::FFmpeg("failed to read frame", e).into())); }
             }
-
-            sys::av_packet_rescale_ts(&mut self.packet,
-                (*self.i.stream).time_base,
-                (*self.i.codec_ctx).time_base);
 
             match sys::avcodec_send_packet(self.i.codec_ctx, &self.packet) {
                 0 => { }
