@@ -604,7 +604,7 @@ mod tests {
     fn test_instantiate_output() {
         init();
         let d = vec![0u8; 1024 * 16];
-        Output::new(d, "ogg", super::sys::AVCodecID::AV_CODEC_ID_VORBIS, 192).unwrap();
+        Output::new(d, "ogg", super::sys::AVCodecID::AV_CODEC_ID_VORBIS, None).unwrap();
     }
 
     #[test]
