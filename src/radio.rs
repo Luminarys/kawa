@@ -68,12 +68,13 @@ pub fn play(conn: shout::ShoutConn, buffer_rec: Receiver<PreBuffer>, log: Logger
         let res = match pb.buffer.read(&mut buf) {
             Ok(0) => {
                 warn!(log, "Starved for data!");
-                thread::sleep(Duration::from_millis(100));
+                thread::sleep(Duration::from_millis(10));
                 Ok(())
             }
             Ok(a) => conn.send(&buf[0..a]),
             Err(_) => {
                 debug!(log, "Buffer drained, need a new one!");
+                thread::sleep(Duration::from_millis(10));
                 Ok(())
             }
         };

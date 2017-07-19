@@ -93,7 +93,9 @@ impl Queue {
                 };
                 // TODO: Make this less retarded - Rust can't deal with two levels of dereference
                 let ct = &self.cfg.queue.fallback.1.clone();
+                warn!(self.log, "Using fallback");
                 self.next = Some(self.initiate_transcode(buf, ct).unwrap());
+                return;
             }
             tries += 1;
             if let Some(path) = self.next_buffer() {

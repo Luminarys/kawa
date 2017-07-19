@@ -104,8 +104,8 @@ impl InternalConfig {
         let mut buffer = Vec::new();
         File::open(&self.queue.fallback).expect("Queue fallback must be present and a vaild file").read_to_end(&mut buffer).expect("IO ERROR!");
         let fbp = self.queue.fallback.split('.').last().expect("Queue fallback must have a container extension");
-        if fbp != "ogg" && fbp != "mp3" {
-            panic!("Fallback must be mp3 or ogg");
+        if fbp != "ogg" && fbp != "mp3" && fbp != "flac" {
+            panic!("Fallback must be mp3 or ogg or flac");
         }
         Ok(Config {
                api: self.api,

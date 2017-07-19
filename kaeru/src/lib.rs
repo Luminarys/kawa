@@ -283,7 +283,7 @@ impl GraphBuilder {
             for (i, output) in self.outputs.iter().enumerate() {
                 match sys::avfilter_link(asplit_ctx, i as u32, output.ctx, 0) {
                     0 => { }
-                    e => return Err(ErrorKind::FFmpeg("failed to link input to asplit", e).into()),
+                    e => return Err(ErrorKind::FFmpeg("failed to link output to asplit", e).into()),
                 }
             }
 
@@ -490,10 +490,18 @@ impl<'a> Iterator for Frames<'a> {
                 e  => { return Some(Err(ErrorKind::FFmpeg("failed to receive frame", e).into())); }
             }
 
-            match sys::av_read_frame(self.i.ctx, &mut self.packet) {
-                0 => { }
-                e if e == sys::AVERROR_EOF => { return None; }
-                e  => { return Some(Err(ErrorKind::FFmpeg("failed to read frame", e).into())); }
+            loop {
+                match sys::av_read_frame(self.i.ctx, &mut self.packet) {
+                    0 => { }
+                    e if e == sys::AVERROR_EOF => { return None; }
+                    e  => { return Some(Err(ErrorKind::FFmpeg("failed to read frame", e).into())); }
+                }
+                let stream_idx = (&self.packet).stream_index as isize;
+                let stream = *(*self.i.ctx).streams.offset(stream_idx);
+                if stream == self.i.stream {
+                    break;
+                }
+                sys::av_packet_unref(&mut self.packet);
             }
 
             match sys::avcodec_send_packet(self.i.codec_ctx, &self.packet) {

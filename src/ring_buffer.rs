@@ -17,14 +17,16 @@ pub struct RBWriter {
 
 #[derive(Clone)]
 struct RingBuffer {
+    cap: usize,
     items: Arc<Mutex<Vec<u8>>>,
     write_pos: Arc<AtomicUsize>,
     read_pos: Arc<AtomicUsize>,
+    len: Arc<AtomicUsize>,
 }
 
 impl RBReader {
     pub fn done(&self) -> bool {
-        self.stopped() && self.rb.wp() == self.rb.rp()
+        self.stopped() && self.rb.len() == 0
     }
 
     pub fn stopped(&self) -> bool {
@@ -40,7 +42,18 @@ impl io::Read for RBReader {
                 a => Ok(a)
             }
         } else {
-            self.rb.read(buf);
+            let mut pos = 0;
+            let bl = buf.len();
+            while pos != bl {
+                while self.rb.len() == 0 {
+                    thread::sleep(Duration::from_millis(5));
+                    if self.done() {
+                        return Ok(pos);
+                    }
+                }
+
+                pos += self.rb.try_read(&mut buf[pos..]);
+            }
             Ok(buf.len())
         }
     }
@@ -57,7 +70,7 @@ impl Drop for RBReader {
 #[allow(dead_code)]
 impl RBWriter {
     pub fn done(&self) -> bool {
-        self.stopped() && self.rb.wp() == self.rb.rp()
+        self.stopped() && self.rb.len() == 0
     }
 
     pub fn stopped(&self) -> bool {
@@ -73,8 +86,19 @@ impl io::Write for RBWriter {
                 a => Ok(a)
             }
         } else {
-            self.rb.write(buf);
-            Ok(buf.len())
+            let mut pos = 0;
+            let bl = buf.len();
+            while pos != bl {
+                while self.rb.len() == self.rb.cap {
+                    thread::sleep(Duration::from_millis(5));
+                    if self.done() {
+                        return Ok(pos);
+                    }
+                }
+
+                pos += self.rb.try_write(&buf[pos..]);
+            }
+            Ok(bl)
         }
     }
 
@@ -93,6 +117,8 @@ unsafe impl Send for RBWriter { }
 
 pub fn new(size: usize) -> (RBWriter, RBReader) {
     let rb = RingBuffer {
+        cap: size,
+        len: Arc::new(AtomicUsize::new(0)),
         items: Arc::new(Mutex::new(vec![0u8; size])),
         write_pos: Arc::new(AtomicUsize::new(0)),
         read_pos: Arc::new(AtomicUsize::new(0)),
@@ -105,25 +131,25 @@ pub fn new(size: usize) -> (RBWriter, RBReader) {
 
 
 impl RingBuffer {
-    pub fn read(&mut self, buf: &mut [u8]) {
-        let mut pos = 0;
-        let bl = buf.len();
-        while pos != bl {
-            while self.rp() != self.wp() {
-                thread::sleep(Duration::from_millis(5));
-            }
-            pos += self.try_read(&mut buf[pos..]);
-        }
+    pub fn try_read(&mut self, buf: &mut [u8]) -> usize {
+        let l = self.len();
+        let amnt = if buf.len() > l {
+            self.do_read(&mut buf[..l])
+        } else {
+            self.do_read(buf)
+        };
+        self.set_len(self.len() - amnt);
+        amnt
     }
 
-    pub fn try_read(&mut self, buf: &mut [u8]) -> usize {
+    fn do_read(&mut self, buf: &mut [u8]) -> usize {
         let mut pos = 0;
         let bl = buf.len();
         let items = self.items.lock().unwrap();
         let mut rp = self.rp();
         let wp = self.wp();
 
-        if rp > wp {
+        if rp >= wp {
             if bl < items.len() - rp {
                 buf[..].copy_from_slice(&items[rp..(rp + bl)]);
                 self.set_rp(rp + bl);
@@ -153,24 +179,25 @@ impl RingBuffer {
         return pos;
     }
 
-    pub fn write(&mut self, buf: &[u8]) {
-        let mut pos = 0;
-        while pos != buf.len() {
-            while self.wp() != self.rp() {
-                thread::sleep(Duration::from_millis(5));
-            }
-            pos += self.try_write(&buf[pos..]);
-        }
+    pub fn try_write(&mut self, buf: &[u8]) -> usize {
+        let mr = self.cap - self.len();
+        let amnt = if buf.len() > mr {
+            self.do_write(&buf[..mr])
+        } else {
+            self.do_write(buf)
+        };
+        self.set_len(self.len() + amnt);
+        amnt
     }
 
-    pub fn try_write(&mut self, buf: &[u8]) -> usize {
+    fn do_write(&mut self, buf: &[u8]) -> usize {
         let mut pos = 0;
         let bl = buf.len();
         let mut items = self.items.lock().unwrap();
         let rp = self.rp();
         let mut wp = self.wp();
 
-        if wp > rp {
+        if wp >= rp {
             if bl < items.len() - wp {
                 items[wp..(wp + bl)].copy_from_slice(buf);
                 self.set_wp(wp + bl);
@@ -190,9 +217,11 @@ impl RingBuffer {
             if left < rp - wp {
                 items[wp..(wp + left)].copy_from_slice(&buf[pos..]);
                 self.set_wp(wp + left);
+                return bl;
             } else {
                 items[wp..rp].copy_from_slice(&buf[pos..(pos + rp - wp)]);
                 self.set_wp(rp);
+                pos += rp - wp;
             }
         }
         return pos;
@@ -213,7 +242,75 @@ impl RingBuffer {
     fn set_wp(&self, wp: usize) {
         self.write_pos.store(wp, Ordering::Release)
     }
+
+    pub fn len(&self) -> usize {
+        self.len.load(Ordering::Acquire)
+    }
+
+    pub fn set_len(&self, len: usize) {
+        self.len.store(len, Ordering::Release);
+    }
+
 }
 
 unsafe impl Send for RingBuffer { }
 unsafe impl Sync for RingBuffer { }
+
+#[test]
+fn test_rb_write() {
+    use std::io::Write;
+
+    let (mut w, r) = new(10);
+    w.write(&vec![1; 8]).unwrap();
+    assert_eq!(w.rb.rp(), 0);
+    assert_eq!(w.rb.wp(), 8);
+    w.write(&vec![1; 2]).unwrap();
+    assert_eq!(w.rb.wp(), 0);
+}
+
+#[test]
+fn test_rb_read() {
+    use std::io::{Write, Read};
+
+    let (mut w, mut r) = new(10);
+    w.write(&vec![1; 8]).unwrap();
+
+    r.read(&mut vec![0; 5]).unwrap();
+    assert_eq!(w.rb.rp(), 5);
+    assert_eq!(w.rb.len(), 3);
+
+    w.write(&vec![1; 6]).unwrap();
+    assert_eq!(w.rb.wp(), 4);
+    assert_eq!(w.rb.len(), 9);
+
+    assert_eq!(w.rb.try_write(&vec![1; 5]), 1);
+    assert_eq!(w.rb.wp(), w.rb.rp());
+    assert_eq!(w.rb.len(), 10);
+
+    r.read(&mut vec![0; 5]).unwrap();
+    assert_eq!(w.rb.rp(), 0);
+    assert_eq!(w.rb.len(), 5);
+}
+
+#[test]
+fn test_conc_rw() {
+    use std::io::{Write, Read};
+    use std::thread;
+
+    let (mut w, mut r) = new(100);
+    let wt = thread::spawn(move || {
+        for i in 0..100 {
+            w.write(&vec![i; 100]).unwrap();
+        }
+    });
+    let rt = thread::spawn(move || {
+        let mut v = vec![0u8; 100];
+        for i in 0..100 {
+            r.read(&mut v[..33]).unwrap();
+            r.read(&mut v[33..]).unwrap();
+            assert_eq!(v, vec![i; 100]);
+        }
+    });
+    wt.join();
+    rt.join();
+}
