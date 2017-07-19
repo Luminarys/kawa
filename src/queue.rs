@@ -1,14 +1,15 @@
-use std::mem;
-use hyper::client::Client;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool};
-use std::io::Read;
+use std::{mem, fs, thread};
+use std::io::{self, Read};
 use config::Config;
+use reqwest;
 use prebuffer::PreBuffer;
-use ring_buffer::RingBuffer;
-use util;
+use ring_buffer;
 use slog::Logger;
 use serde_json as serde;
+use shout;
+use kaeru;
+
+const RB_LEN: usize = 128000;
 
 pub struct Queue {
     pub next: Option<Vec<PreBuffer>>,
@@ -16,6 +17,12 @@ pub struct Queue {
     counter: usize,
     cfg: Config,
     log: Logger,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct QueueEntry {
+    pub id: i64,
+    pub path: String,
 }
 
 impl Queue {
@@ -76,57 +83,63 @@ impl Queue {
 
     pub fn start_next_tc(&mut self) {
         debug!(self.log, "Beginning next pre-transcode!");
+        let mut tries = 0;
         loop {
-            if let Some(pbs) = self.initiate_transcode() {
-                self.next = Some(pbs);
-                return;
+            if tries == 5 {
+                use std::borrow::Borrow;
+                let buf = {
+                    let b: &Vec<u8> = self.cfg.queue.fallback.0.borrow();
+                    io::Cursor::new(b.clone())
+                };
+                // TODO: Make this less retarded - Rust can't deal with two levels of dereference
+                let ct = &self.cfg.queue.fallback.1.clone();
+                self.next = Some(self.initiate_transcode(buf, ct).unwrap());
             }
-        }
-    }
-
-    fn next_buffer(&mut self) -> (Arc<RingBuffer<u8>>, String) {
-        let mut buf = self.next_queue_buffer();
-        let mut tries = 10;
-        while buf.is_none() {
-            if tries == 0 {
-                warn!(self.log, "Using fallback song!");
-                let (ref buf, ref name) = self.cfg.queue.fallback;
-                return (util::data_to_rb(buf.clone()), name.clone());
-            }
-            buf = self.random_buffer();
-            tries -= 1;
-        }
-        buf.unwrap()
-    }
-
-    fn next_queue_buffer(&mut self) -> Option<(Arc<RingBuffer<u8>>, String)> {
-        while !self.entries.is_empty() {
-            {
-                let entry = &self.entries[0];
-                if let Some(r) = util::path_to_rb(&entry.path) {
-                    info!(self.log, "Using queue entry {:?}", entry.path);
-                    return Some(r);
+            tries += 1;
+            if let Some(path) = self.next_buffer() {
+                match fs::File::open(path.clone()) {
+                    Ok(f) => {
+                        let ext = if let Some(e) = path.split('.').last() { e } else { continue };
+                        match self.initiate_transcode(f, ext) {
+                            Ok(bufs) => { self.next = Some(bufs); return; },
+                            Err(e) => {
+                                warn!(self.log, "Failed to start transcode: {}", e);
+                                continue;
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        warn!(self.log, "Failed to open file at path {}: {}", path, e);
+                        continue;
+                    }
                 }
             }
-            self.entries.remove(0);
+        }
+    }
+
+    fn next_buffer(&mut self) -> Option<String> {
+        self.next_queue_buffer().or(self.random_buffer())
+    }
+
+    fn next_queue_buffer(&mut self) -> Option<String> {
+        while !self.entries.is_empty() {
+            let entry = &self.entries[0];
+            info!(self.log, "Using queue entry {:?}", entry.path);
+            return Some(entry.path.clone());
         }
         return None;
     }
 
-    fn random_buffer(&mut self) -> Option<(Arc<RingBuffer<u8>>, String)> {
-        let client = Client::new();
-
+    fn random_buffer(&mut self) -> Option<String> {
         let mut body = String::new();
-        let mut path = String::new();
-        let res = client.get(&self.cfg.queue.random.clone())
-            .send()
+        let path = String::new();
+        let res = reqwest::get(&self.cfg.queue.random.clone())
             .ok()
             .and_then(|mut r| r.read_to_string(&mut body).ok())
             .and_then(|_| serde::from_str(&body).ok())
-            .and_then(|e: QueueEntry| {
+            .map(|e: QueueEntry| {
                 debug!(self.log, "Attempting to use random buffer from path {:?}", e.path);
-                path = e.path.clone();
-                util::path_to_rb(&e.path)
+                e.path.clone()
             });
         if res.is_some() {
             info!(self.log, "Using random entry {:?}", path);
@@ -134,41 +147,33 @@ impl Queue {
         res
     }
 
-    fn initiate_transcode(&mut self) -> Option<Vec<PreBuffer>> {
-        let token = Arc::new(AtomicBool::new(false));
-        let (data, ext) = self.next_buffer();
-        let bufs: Vec<_> = self.cfg.streams.iter().map(|_| Arc::new(RingBuffer::new(500000))).collect();
-        util::rb_broadcast(data.clone(), bufs.clone(), token.clone());
+    fn initiate_transcode<T: io::Read + Send>(&mut self, s: T, container: &str) -> kaeru::Result<Vec<PreBuffer>> {
         let mut prebufs = Vec::new();
-        debug!(self.log, "Attempting to spawn transcoders with ID: {:?}", self.counter);
-        for (stream, buf) in self.cfg.streams.iter().zip(bufs) {
-            let slog = self.log.new(o!(
-                    "Transcoder, mount" => stream.mount.clone(),
-                    "QID" => self.counter
-            ));
-            if let Some(prebuf) = PreBuffer::from_transcode(data.clone(), buf, &ext, token.clone(), stream, slog) {
-                prebufs.push(prebuf);
-            } else {
-                // Terminate if any prebuffers fail to create.
-                return None;
+        let input = kaeru::Input::new(s, container)?;
+        let mut gb = kaeru::GraphBuilder::new(input)?;
+        for s in self.cfg.streams.iter() {
+            let (tx, rx) = ring_buffer::new(RB_LEN);
+            let ct = match s.container {
+                shout::ShoutFormat::Ogg => "ogg",
+                shout::ShoutFormat::MP3 => "ogg",
+                _ => unreachable!(),
+            };
+            let output = kaeru::Output::new(tx, ct, s.codec, s.bitrate)?;
+            gb.add_output(output)?;
+            let log = self.log.new(o!("Transcoder, mount" => s.mount.clone(), "QID" => self.counter));
+            prebufs.push(PreBuffer { buffer: rx, log });
+        }
+        let g = gb.build()?;
+        let log = self.log.new(o!("QID" => self.counter, "thread" => "transcoder"));
+        thread::spawn(move || {
+            debug!(log, "Starting");
+            match g.run() {
+                Ok(()) => { }
+                Err(e) => { debug!(log, "completed with err: {}", e) }
             }
-        }
+            debug!(log, "Completed");
+        });
         self.counter += 1;
-        Some(prebufs)
-    }
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-pub struct QueueEntry {
-    pub id: i64,
-    pub path: String,
-}
-
-impl QueueEntry {
-    pub fn new(id: i64, path: String) -> QueueEntry {
-        QueueEntry {
-            id: id,
-            path: path,
-        }
+        Ok(prebufs)
     }
 }

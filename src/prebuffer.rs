@@ -1,54 +1,8 @@
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use slog::Logger;
-use shout;
-use config::StreamConfig;
-use ring_buffer::RingBuffer;
-use transcode;
+use ring_buffer::RBReader;
 
 #[derive(Clone)]
 pub struct PreBuffer {
-    pub buffer: Arc<RingBuffer<u8>>,
-    pub token: Arc<AtomicBool>,
+    pub buffer: RBReader,
     pub log: Logger,
-}
-
-impl PreBuffer {
-    pub fn from_transcode(input: Arc<RingBuffer<u8>>,
-                          out_buf: Arc<RingBuffer<u8>>,
-                          ext: &str,
-                          token: Arc<AtomicBool>,
-                          cfg: &StreamConfig,
-                          log: Logger) -> Option<PreBuffer> {
-        // 500KB Buffer
-        let res_ext = match cfg.container {
-            shout::ShoutFormat::Ogg => "ogg",
-            shout::ShoutFormat::MP3 => "mp3",
-            _ => {
-                unreachable!();
-            }
-        };
-        if let Err(e) = transcode::transcode(input,
-                                             ext,
-                                             out_buf.clone(),
-                                             res_ext,
-                                             cfg.codec,
-                                             cfg.bitrate,
-                                             token.clone(),
-                                             log.clone()) {
-            warn!(log, "Transcoder creation failed: {}", e);
-            None
-        } else {
-            Some(PreBuffer {
-                buffer: out_buf,
-                token: token,
-                log: log,
-            })
-        }
-    }
-
-    pub fn cancel(&mut self) {
-        debug!(self.log, "Stopping transcode!");
-        self.token.store(true, Ordering::SeqCst);
-    }
 }

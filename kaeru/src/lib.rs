@@ -165,6 +165,8 @@ impl Drop for Graph {
     }
 }
 
+unsafe impl Send for Graph { }
+
 impl GraphBuilder {
     pub fn new(input: Input) -> Result<GraphBuilder> {
         unsafe {
@@ -177,7 +179,7 @@ impl GraphBuilder {
             let time_base = (*input.stream).time_base;
             let sample_fmt = CStr::from_ptr(sys::av_get_sample_fmt_name((*input.codec_ctx).sample_fmt))
                 .to_str().chain_err(|| "failed to parse format!")?;
-            let args = format!("time_base={}/{}:sample_rate={}:sample_fmt={}:channel_layout=0x{}",
+            let args = format!("time_base={}/{}:sample_rate={}:sample_fmt={}:channel_layout=0x{:X}",
                                time_base.num, time_base.den, (*input.codec_ctx).sample_rate,
                                sample_fmt, (*input.codec_ctx).channel_layout);
 
@@ -308,9 +310,10 @@ impl GraphBuilder {
     }
 }
 
+unsafe impl Send for GraphBuilder { }
 
 impl Input {
-    pub fn new<T: Read + Send + Sized + 'static>(t: T, container: &str) -> Result<Input> {
+    pub fn new<T: Read + Send + Sized>(t: T, container: &str) -> Result<Input> {
         unsafe {
             // Cache page size used here
             // TODO: check to see if we ned to av_free the buffer
@@ -394,7 +397,7 @@ impl Drop for Input {
 }
 
 impl Output {
-    pub fn new<T: Write + Send + Sized + 'static>(t: T, container: &str, codec_id: sys::AVCodecID, bit_rate: Option<i64>) -> Result<Output> {
+    pub fn new<T: Write + Send + Sized>(t: T, container: &str, codec_id: sys::AVCodecID, bit_rate: Option<i64>) -> Result<Output> {
         unsafe {
             let buffer = sys::av_malloc(4096) as *mut u8;
             ck_null!(buffer);

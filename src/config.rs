@@ -17,9 +17,9 @@ pub struct Config {
 #[derive(Clone)]
 pub struct StreamConfig {
     pub mount: String,
-    pub bitrate: Option<usize>,
+    pub bitrate: Option<i64>,
     pub container: ShoutFormat,
-    pub codec: Id,
+    pub codec: AVCodecID,
 }
 
 #[derive(Clone, Deserialize)]
@@ -95,7 +95,7 @@ impl InternalConfig {
 
             streams.push(StreamConfig {
                              mount: s.mount,
-                             bitrate: s.bitrate,
+                             bitrate: s.bitrate.map(|b| b as i64),
                              container: container,
                              codec: codec,
                          })
@@ -103,13 +103,17 @@ impl InternalConfig {
 
         let mut buffer = Vec::new();
         File::open(&self.queue.fallback).expect("Queue fallback must be present and a vaild file").read_to_end(&mut buffer).expect("IO ERROR!");
+        let fbp = self.queue.fallback.split('.').last().expect("Queue fallback must have a container extension");
+        if fbp != "ogg" && fbp != "mp3" {
+            panic!("Fallback must be mp3 or ogg");
+        }
         Ok(Config {
                api: self.api,
                radio: self.radio,
                streams: streams,
                queue: QueueConfig {
                     random: self.queue.random,
-                    fallback: (Arc::new(buffer), self.queue.fallback),
+                    fallback: (Arc::new(buffer), fbp.to_owned()),
                },
            })
     }

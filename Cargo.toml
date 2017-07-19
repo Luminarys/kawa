@@ -5,7 +5,7 @@ authors = ["Luminarys <postmaster@gensok.io>", "ParadoxSpiral <ParadoxSpiral@ris
 
 [dependencies]
 kaeru = { path = "kaeru" }
-shout = "0.1.6"
+shout = "0.2.0"
 libc = "0.2"
 toml = "0.4"
 slog = "2"
@@ -16,3 +16,4 @@ serde_json = "1.0"
 serde_derive = "1.0"
 reqwest = "0.7"
 lazy_static = "*"
+rouille = "1.0.2"

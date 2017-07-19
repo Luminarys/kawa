@@ -7,15 +7,17 @@ extern crate libc;
 extern crate toml;
 extern crate serde;
 extern crate serde_json;
+extern crate reqwest;
 #[macro_use]
 extern crate lazy_static;
 #[macro_use]
 extern crate serde_derive;
+#[macro_use]
+extern crate rouille;
 
 extern crate kaeru;
 
 mod radio;
-mod transcode;
 mod config;
 mod api;
 mod queue;
@@ -29,6 +31,8 @@ use std::io::{Read};
 
 lazy_static! {
     pub static ref LOG: slog::Logger = {
+        use slog::Drain;
+
         let decorator = slog_term::TermDecorator::new().build();
         let drain = slog_term::FullFormat::new(decorator).build().fuse();
         let drain = slog_async::Async::new(drain).build().fuse();
@@ -39,10 +43,11 @@ lazy_static! {
 fn main() {
     let root_log = LOG.clone();
     info!(root_log, "Initializing ffmpeg");
-    if kaeru::init().is_err() {
-        crit!(root_log, "FFmpeg could not be initialized!");
-        return;
-    }
+    kaeru::init();
+    // if kaeru::init().is_err() {
+    //     crit!(root_log, "FFmpeg could not be initialized!");
+    //     return;
+    // }
 
     let path = env::args().nth(1).unwrap_or("config.toml".to_owned());
     let mut s = String::new();

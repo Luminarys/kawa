@@ -2,8 +2,8 @@ use std::sync::{Arc, Mutex};
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::thread;
 use std::time::Duration;
-use std::sync::atomic::Ordering;
 use slog::Logger;
+use std::io::Read;
 
 use shout;
 use queue::Queue;
@@ -51,7 +51,7 @@ impl RadioConn {
 }
 
 pub fn play(conn: shout::ShoutConn, buffer_rec: Receiver<PreBuffer>, log: Logger) {
-    let step = 4096;
+    let mut buf = vec![0u8; 4096 * 4];
     debug!(log, "Awaiting initial buffer");
     let mut pb = buffer_rec.recv().unwrap();
     loop {
@@ -65,22 +65,25 @@ pub fn play(conn: shout::ShoutConn, buffer_rec: Receiver<PreBuffer>, log: Logger
             Err(TryRecvError::Disconnected) => { return; }
         }
 
-        if pb.buffer.len() > 0 {
-            if let Err(_) = conn.send(pb.buffer.try_read(step)) {
-                warn!(log, "Failed to send data, attempting to reconnect");
-                if let Err(_) = conn.reconnect() {
-                    crit!(log, "Failed to reconnect");
-                }
+        let res = match pb.buffer.read(&mut buf) {
+            Ok(0) => {
+                warn!(log, "Starved for data!");
+                thread::sleep(Duration::from_millis(100));
+                Ok(())
             }
-            conn.sync();
-        } else {
-            // We're starved, probably should not happen.
-            // If so terminate to ensure that we get on with
-            // next TC ASAP
-            warn!(log, "Starved for data!");
-            pb.cancel();
-            thread::sleep(Duration::from_millis(100));
+            Ok(a) => conn.send(&buf[0..a]),
+            Err(_) => {
+                debug!(log, "Buffer drained, need a new one!");
+                Ok(())
+            }
+        };
+        if let Err(_) = res {
+            warn!(log, "Failed to send data, attempting to reconnect");
+            if let Err(_) = conn.reconnect() {
+                crit!(log, "Failed to reconnect");
+            }
         }
+        conn.sync();
     }
 }
 
@@ -123,10 +126,7 @@ pub fn start_streams(cfg: Config,
         loop {
             // If any prebuffer completes, just move on to next song. We want to minimize downtime
             // even if it means some songs get cut off early
-            if prebuffers.iter()
-                .any(|prebuffer| {
-                    prebuffer.token.load(Ordering::Acquire) && prebuffer.buffer.len() == 0
-                }) {
+            if prebuffers.iter().any(|pb| pb.buffer.done()) {
                 break;
             } else {
                 if let Ok(msg) = updates.try_recv() {
