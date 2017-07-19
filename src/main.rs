@@ -20,6 +20,7 @@ mod config;
 mod api;
 mod queue;
 mod util;
+mod ring_buffer;
 mod prebuffer;
 
 use std::env;
@@ -38,7 +39,7 @@ lazy_static! {
 fn main() {
     let root_log = LOG.clone();
     info!(root_log, "Initializing ffmpeg");
-    if ffmpeg::init().is_err() {
+    if kaeru::init().is_err() {
         crit!(root_log, "FFmpeg could not be initialized!");
         return;
     }

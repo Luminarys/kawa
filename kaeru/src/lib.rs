@@ -208,6 +208,9 @@ impl GraphBuilder {
             } else {
                 (*output.codec_ctx).sample_rate = (*input.codec_ctx).sample_rate;
             }
+            if (*output.codec_ctx).bit_rate == 0 {
+                (*output.codec_ctx).bit_rate = (*input.codec_ctx).bit_rate;
+            }
             (*output.codec_ctx).channel_layout = (*input.codec_ctx).channel_layout;
             (*output.codec_ctx).channels = sys::av_get_channel_layout_nb_channels((*input.codec_ctx).channel_layout);
             let time_base = sys::AVRational {
@@ -391,7 +394,7 @@ impl Drop for Input {
 }
 
 impl Output {
-    pub fn new<T: Write + Send + Sized + 'static>(t: T, container: &str, codec_id: sys::AVCodecID, bit_rate: usize) -> Result<Output> {
+    pub fn new<T: Write + Send + Sized + 'static>(t: T, container: &str, codec_id: sys::AVCodecID, bit_rate: Option<i64>) -> Result<Output> {
         unsafe {
             let buffer = sys::av_malloc(4096) as *mut u8;
             ck_null!(buffer);
@@ -412,7 +415,11 @@ impl Output {
             }
             let codec_ctx = sys::avcodec_alloc_context3(codec);
             ck_null!(codec_ctx);
-            (*codec_ctx).bit_rate = bit_rate as i64 * 1000;
+            if let Some(br) = bit_rate {
+                (*codec_ctx).bit_rate = br as i64 * 1000;
+            } else {
+                (*codec_ctx).bit_rate = 0;
+            }
             (*codec_ctx).sample_fmt = *(*codec).sample_fmts;
             let stream = sys::avformat_new_stream(ctx, codec);
             ck_null!(stream);
@@ -612,8 +619,8 @@ mod tests {
         let fout2 = File::create("test/test2.ogg").unwrap();
 
         let i = Input::new(fin, "mp3")?;
-        let o1 = Output::new(fout1, "ogg", super::sys::AVCodecID::AV_CODEC_ID_OPUS, 192)?;
-        let o2 = Output::new(fout2, "ogg", super::sys::AVCodecID::AV_CODEC_ID_VORBIS, 192)?;
+        let o1 = Output::new(fout1, "ogg", super::AVCodecID::AV_CODEC_ID_OPUS, None)?;
+        let o2 = Output::new(fout2, "ogg", super::AVCodecID::AV_CODEC_ID_VORBIS, None)?;
         let mut gb = GraphBuilder::new(i)?;
         gb.add_output(o1)?.add_output(o2)?;
         gb.build()?.run()

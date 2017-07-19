@@ -1,6 +1,6 @@
-use ffmpeg::codec::id::Id;
 use shout::ShoutFormat;
 use toml;
+use kaeru::AVCodecID;
 
 use std::sync::Arc;
 use std::fs::File;
@@ -82,15 +82,15 @@ impl InternalConfig {
             };
             let codec = if let Some(c) = s.codec {
                 match &*c {
-                    "opus" => Id::OPUS_DEPRECATED,
-                    "vorbis" => Id::VORBIS,
-                    "flac" => Id::FLAC,
-                    "mp3" => Id::MP3,
+                    "opus" => AVCodecID::AV_CODEC_ID_OPUS,
+                    "vorbis" => AVCodecID::AV_CODEC_ID_VORBIS,
+                    "flac" => AVCodecID::AV_CODEC_ID_FLAC,
+                    "mp3" => AVCodecID::AV_CODEC_ID_MP3,
                     _ => return Err(format!("Currently, only opus, vorbis, flac, and mp3 are \
                                             supported as codecs.")),
                 }
             } else {
-                Id::MP3
+                AVCodecID::AV_CODEC_ID_OPUS
             };
 
             streams.push(StreamConfig {
@@ -100,7 +100,6 @@ impl InternalConfig {
                              codec: codec,
                          })
         }
-
 
         let mut buffer = Vec::new();
         File::open(&self.queue.fallback).expect("Queue fallback must be present and a vaild file").read_to_end(&mut buffer).expect("IO ERROR!");
