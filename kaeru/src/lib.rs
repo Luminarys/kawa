@@ -38,6 +38,8 @@ macro_rules! ck_null {
     }
 }
 
+const FFMPEG_BUFFER_SIZE: usize = 4096;
+
 pub struct Graph {
     #[allow(dead_code)] // The graph needs to be kept as context for the filters
     graph: GraphP,
@@ -330,7 +332,7 @@ impl Input {
         unsafe {
             // Cache page size used here
             // TODO: check to see if we ned to av_free the buffer
-            let buffer = sys::av_malloc(4096) as *mut u8;
+            let buffer = sys::av_malloc(FFMPEG_BUFFER_SIZE) as *mut u8;
             ck_null!(buffer);
             let opaque = Opaque::new(t);
             let io_ctx = sys::avio_alloc_context(buffer, 4096, 0, opaque.ptr, Some(read_cb::<T>), None, None);
