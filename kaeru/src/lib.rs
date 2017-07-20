@@ -79,6 +79,16 @@ pub struct Output {
     _opaque: Opaque,
 }
 
+#[derive(Debug, Clone)]
+pub struct Metadata {
+    pub title: Option<String>,
+    pub album: Option<String>,
+    pub artist: Option<String>,
+    pub genre: Option<String>,
+    pub date: Option<String>,
+    pub track: Option<String>,
+}
+
 struct Frames<'a> {
     i: &'a Input,
     frame: *mut sys::AVFrame,
@@ -377,6 +387,33 @@ impl Input {
         }
     }
 
+    pub fn metadata(&self) -> Metadata {
+        unsafe {
+            Metadata {
+                title: self.get_metadata_val("title"),
+                album: self.get_metadata_val("album"),
+                artist: self.get_metadata_val("artist"),
+                genre: self.get_metadata_val("genre"),
+                date: self.get_metadata_val("date"),
+                track: self.get_metadata_val("track"),
+            }
+        }
+    }
+
+    unsafe fn get_metadata_val(&self, opt: &str) -> Option<String> {
+        let entry = sys::av_dict_get((*self.ctx).metadata, str_conv!(opt), ptr::null(), 0);
+        if entry.is_null() {
+            None
+        } else {
+            let len = libc::strlen((*entry).value) + 1;
+            let mut val = vec![0u8; len];
+            let mptr = val.as_mut_ptr() as *mut c_char;
+            libc::strcpy(mptr, (*entry).value as *const c_char);
+            val.pop();
+            String::from_utf8(val).ok()
+        }
+    }
+
     unsafe fn read_frames(&self, frame: *mut sys::AVFrame) -> Frames {
         let mut packet: sys::AVPacket = mem::uninitialized();
         packet.data = ptr::null_mut();
@@ -551,7 +588,7 @@ unsafe extern fn write_cb<T: Write + Sized>(opaque: *mut c_void, buf: *mut uint8
 impl Drop for GraphP {
     fn drop(&mut self) {
         unsafe {
-            // sys::avfilter_graph_free(&mut self.ptr);
+            sys::avfilter_graph_free(&mut self.ptr);
         }
     }
 }
@@ -591,7 +628,9 @@ fn get_error(code: c_int) -> String {
         let mut msg = vec![0u8; len];
         let mptr = msg.as_mut_ptr() as *mut c_char;
         libc::strcpy(mptr, ptr);
-        CString::from_vec_unchecked(msg).into_string().unwrap_or("could not decode error".to_owned())
+        // Pop the null byte
+        msg.pop();
+        String::from_utf8(msg).unwrap_or("improper error".to_owned())
     }
 }
 
@@ -645,5 +684,15 @@ mod tests {
         gb.add_output(o3)?;
         gb.add_output(o4)?;
         gb.build()?.run()
+    }
+
+    #[test]
+    fn test_metadata() {
+        init();
+        let fin = File::open("/tmp/in.flac").unwrap();
+        let i = Input::new(fin, "flac").unwrap();
+        let md = i.metadata();
+        println!("{:?}", md);
+        assert!(md.title.is_some());
     }
 }

@@ -1,4 +1,4 @@
-use std::{mem, fs, thread};
+use std::{mem, fs, thread, sync};
 use std::io::{self, Read};
 use config::Config;
 use reqwest;
@@ -8,6 +8,7 @@ use slog::Logger;
 use serde_json as serde;
 use shout;
 use kaeru;
+use util;
 
 const RB_LEN: usize = 128000;
 
@@ -152,6 +153,7 @@ impl Queue {
     fn initiate_transcode<T: io::Read + Send>(&mut self, s: T, container: &str) -> kaeru::Result<Vec<PreBuffer>> {
         let mut prebufs = Vec::new();
         let input = kaeru::Input::new(s, container)?;
+        let metadata = sync::Arc::new(input.metadata());
         let mut gb = kaeru::GraphBuilder::new(input)?;
         for s in self.cfg.streams.iter() {
             let (tx, rx) = ring_buffer::new(RB_LEN);
@@ -163,7 +165,7 @@ impl Queue {
             let output = kaeru::Output::new(tx, ct, s.codec, s.bitrate)?;
             gb.add_output(output)?;
             let log = self.log.new(o!("Transcoder, mount" => s.mount.clone(), "QID" => self.counter));
-            prebufs.push(PreBuffer { buffer: rx, log });
+            prebufs.push(PreBuffer::new(rx, metadata.clone(), log));
         }
         let g = gb.build()?;
         let log = self.log.new(o!("QID" => self.counter, "thread" => "transcoder"));

@@ -44,10 +44,6 @@ fn main() {
     let root_log = LOG.clone();
     info!(root_log, "Initializing ffmpeg");
     kaeru::init();
-    // if kaeru::init().is_err() {
-    //     crit!(root_log, "FFmpeg could not be initialized!");
-    //     return;
-    // }
 
     let path = env::args().nth(1).unwrap_or("config.toml".to_owned());
     let mut s = String::new();

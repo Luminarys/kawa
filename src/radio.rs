@@ -5,11 +5,12 @@ use std::time::Duration;
 use slog::Logger;
 use std::io::Read;
 
-use shout;
 use queue::Queue;
 use api::{ApiMessage, QueuePos};
 use config::Config;
 use prebuffer::PreBuffer;
+use shout;
+use util;
 
 struct RadioConn {
     tx: Sender<PreBuffer>,
@@ -54,6 +55,8 @@ pub fn play(conn: shout::ShoutConn, buffer_rec: Receiver<PreBuffer>, log: Logger
     let mut buf = vec![0u8; 4096 * 4];
     debug!(log, "Awaiting initial buffer");
     let mut pb = buffer_rec.recv().unwrap();
+    // TODO: Actually set metadata, this doesn't work...
+    conn.set_metadata(util::conv_metadata(&pb.metadata)).unwrap();
     loop {
         let res = match pb.buffer.read(&mut buf) {
             Ok(0) => {
@@ -65,6 +68,7 @@ pub fn play(conn: shout::ShoutConn, buffer_rec: Receiver<PreBuffer>, log: Logger
             Err(_) => {
                 debug!(log, "Buffer drained, waiting for next!");
                 pb = buffer_rec.recv().unwrap();
+                conn.set_metadata(util::conv_metadata(&pb.metadata)).unwrap();
                 Ok(())
             }
         };
