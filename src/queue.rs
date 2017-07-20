@@ -157,7 +157,7 @@ impl Queue {
             let (tx, rx) = ring_buffer::new(RB_LEN);
             let ct = match s.container {
                 shout::ShoutFormat::Ogg => "ogg",
-                shout::ShoutFormat::MP3 => "ogg",
+                shout::ShoutFormat::MP3 => "mp3",
                 _ => unreachable!(),
             };
             let output = kaeru::Output::new(tx, ct, s.codec, s.bitrate)?;

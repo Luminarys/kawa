@@ -1,5 +1,5 @@
 use std::sync::{Arc, Mutex};
-use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
+use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 use std::time::Duration;
 use slog::Logger;
@@ -55,16 +55,6 @@ pub fn play(conn: shout::ShoutConn, buffer_rec: Receiver<PreBuffer>, log: Logger
     debug!(log, "Awaiting initial buffer");
     let mut pb = buffer_rec.recv().unwrap();
     loop {
-        match buffer_rec.try_recv() {
-            Ok(b) => {
-                debug!(log, "Received new buffer");
-                debug!(b.log, "In use by radio thread");
-                pb = b;
-            }
-            Err(TryRecvError::Empty) => { }
-            Err(TryRecvError::Disconnected) => { return; }
-        }
-
         let res = match pb.buffer.read(&mut buf) {
             Ok(0) => {
                 warn!(log, "Starved for data!");
@@ -73,8 +63,8 @@ pub fn play(conn: shout::ShoutConn, buffer_rec: Receiver<PreBuffer>, log: Logger
             }
             Ok(a) => conn.send(&buf[0..a]),
             Err(_) => {
-                debug!(log, "Buffer drained, need a new one!");
-                thread::sleep(Duration::from_millis(10));
+                debug!(log, "Buffer drained, waiting for next!");
+                pb = buffer_rec.recv().unwrap();
                 Ok(())
             }
         };

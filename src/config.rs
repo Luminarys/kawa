@@ -90,7 +90,12 @@ impl InternalConfig {
                                             supported as codecs.")),
                 }
             } else {
-                AVCodecID::AV_CODEC_ID_OPUS
+                // Default to OPUS for Ogg, and MP3 for MP3
+                match container {
+                    ShoutFormat::Ogg => AVCodecID::AV_CODEC_ID_OPUS,
+                    ShoutFormat::MP3 => AVCodecID::AV_CODEC_ID_MP3,
+                    _ => unreachable!(),
+                }
             };
 
             streams.push(StreamConfig {

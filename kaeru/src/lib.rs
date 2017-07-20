@@ -632,15 +632,18 @@ mod tests {
         let fout1 = File::create("test/test.ogg").unwrap();
         let fout2 = File::create("test/test2.ogg").unwrap();
         let fout3 = File::create("test/test3.ogg").unwrap();
+        let fout4 = File::create("test/test4.mp3").unwrap();
 
         let i = Input::new(fin, "mp3")?;
         let o1 = Output::new(fout1, "ogg", super::AVCodecID::AV_CODEC_ID_OPUS, None)?;
         let o2 = Output::new(fout2, "ogg", super::AVCodecID::AV_CODEC_ID_VORBIS, None)?;
         let o3 = Output::new(fout3, "ogg", super::AVCodecID::AV_CODEC_ID_FLAC, None)?;
+        let o4 = Output::new(fout4, "mp3", super::AVCodecID::AV_CODEC_ID_MP3, None)?;
         let mut gb = GraphBuilder::new(i)?;
         gb.add_output(o1)?;
         gb.add_output(o2)?;
         gb.add_output(o3)?;
+        gb.add_output(o4)?;
         gb.build()?.run()
     }
 }
