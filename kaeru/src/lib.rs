@@ -270,6 +270,10 @@ impl GraphBuilder {
             ck_null!(asplit);
             let asplit_ctx = sys::avfilter_graph_alloc_filter(self.graph.ptr, asplit, str_conv!("splitter"));
             ck_null!(asplit_ctx);
+            match sys::av_opt_set_int(asplit_ctx as *mut c_void, str_conv!("outputs"), self.outputs.len() as i64, sys::AV_OPT_SEARCH_CHILDREN) {
+                0 => { }
+                e => return Err(ErrorKind::FFmpeg("failed to configure asplit", e).into()),
+            }
             match sys::avfilter_init_str(asplit_ctx, ptr::null()) {
                 0 => { }
                 e => return Err(ErrorKind::FFmpeg("failed to initialize asplit", e).into()),
@@ -278,7 +282,6 @@ impl GraphBuilder {
                 0 => { }
                 e => return Err(ErrorKind::FFmpeg("failed to link input to asplit", e).into()),
             }
-            (*asplit_ctx).nb_outputs = self.outputs.len() as u32;
 
             for (i, output) in self.outputs.iter().enumerate() {
                 match sys::avfilter_link(asplit_ctx, i as u32, output.ctx, 0) {
@@ -548,7 +551,7 @@ unsafe extern fn write_cb<T: Write + Sized>(opaque: *mut c_void, buf: *mut uint8
 impl Drop for GraphP {
     fn drop(&mut self) {
         unsafe {
-            sys::avfilter_graph_free(&mut self.ptr);
+            // sys::avfilter_graph_free(&mut self.ptr);
         }
     }
 }
@@ -628,12 +631,16 @@ mod tests {
         let fin = File::open("test/test.mp3").unwrap();
         let fout1 = File::create("test/test.ogg").unwrap();
         let fout2 = File::create("test/test2.ogg").unwrap();
+        let fout3 = File::create("test/test3.ogg").unwrap();
 
         let i = Input::new(fin, "mp3")?;
         let o1 = Output::new(fout1, "ogg", super::AVCodecID::AV_CODEC_ID_OPUS, None)?;
         let o2 = Output::new(fout2, "ogg", super::AVCodecID::AV_CODEC_ID_VORBIS, None)?;
+        let o3 = Output::new(fout3, "ogg", super::AVCodecID::AV_CODEC_ID_FLAC, None)?;
         let mut gb = GraphBuilder::new(i)?;
-        gb.add_output(o1)?.add_output(o2)?;
+        gb.add_output(o1)?;
+        gb.add_output(o2)?;
+        gb.add_output(o3)?;
         gb.build()?.run()
     }
 }

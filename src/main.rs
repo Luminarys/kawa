@@ -100,8 +100,8 @@ mod tests {
         let (w3, mut r3) = ring_buffer::new(4096 * 2);
     
         let i = Input::new(fin, "flac")?;
-        let o1 = Output::new(w1, "ogg", kaeru::AVCodecID::AV_CODEC_ID_OPUS, None)?;
-        let o2 = Output::new(w2, "mp3", kaeru::AVCodecID::AV_CODEC_ID_MP3, None)?;
+        let o1 = Output::new(w2, "mp3", kaeru::AVCodecID::AV_CODEC_ID_MP3, Some(192))?;
+        let o2 = Output::new(w1, "ogg", kaeru::AVCodecID::AV_CODEC_ID_OPUS, Some(192))?;
         let o3 = Output::new(w3, "ogg", kaeru::AVCodecID::AV_CODEC_ID_FLAC, None)?;
         let mut gb = GraphBuilder::new(i)?;
         gb.add_output(o1)?.add_output(o2)?.add_output(o3)?;
