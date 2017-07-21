@@ -80,51 +80,43 @@ fn main() {
 mod tests {
     use super::*;
     use super::kaeru::{Input, Output, GraphBuilder};
-    use std::thread;
+    use std::{thread, io};
     use std::fs::File;
 
     #[test]
     fn test_tc() {
         kaeru::init();
-        tc().unwrap()
+        loop {
+            tc();
+        }
+    }
+
+    struct Dum(usize);
+
+    impl io::Write for Dum {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.0 += buf.len();
+            if self.0 < 4096 * 32 {
+                Ok(buf.len())
+            } else {
+                Err(io::Error::new(io::ErrorKind::Other, "oh no!"))
+            }
+        }
+
+        fn flush(&mut self) -> io::Result<()> { Ok(()) }
     }
 
     fn tc() -> kaeru::Result<()> {
         let fin = File::open("/tmp/in.flac").unwrap();
-        let (w1, mut r1) = ring_buffer::new(4096 * 2);
-        let (w2, mut r2) = ring_buffer::new(4096 * 2);
-        let (w3, mut r3) = ring_buffer::new(4096 * 2);
-    
         let i = Input::new(fin, "flac")?;
-        let o1 = Output::new(w2, "mp3", kaeru::AVCodecID::AV_CODEC_ID_MP3, Some(192))?;
-        let o2 = Output::new(w1, "ogg", kaeru::AVCodecID::AV_CODEC_ID_OPUS, Some(192))?;
-        let o3 = Output::new(w3, "ogg", kaeru::AVCodecID::AV_CODEC_ID_FLAC, None)?;
+        let o1 = Output::new(Dum(0), "mp3", kaeru::AVCodecID::AV_CODEC_ID_MP3, Some(192))?;
+        let o2 = Output::new(Dum(0), "ogg", kaeru::AVCodecID::AV_CODEC_ID_OPUS, Some(192))?;
+        let o3 = Output::new(Dum(0), "ogg", kaeru::AVCodecID::AV_CODEC_ID_FLAC, None)?;
         let mut gb = GraphBuilder::new(i)?;
         gb.add_output(o1)?.add_output(o2)?.add_output(o3)?;
         let g = gb.build()?;
         let gt = thread::spawn(move || g.run().unwrap());
-        let t1 = thread::spawn(move || {
-            let mut buf = vec![0u8; 4096];
-            while !r1.done() {
-                let a = r1.read(&mut buf).unwrap();
-            }
-        });
-        let t2 = thread::spawn(move || {
-            let mut buf = vec![0u8; 4096];
-            while !r2.done() {
-                let a = r2.read(&mut buf).unwrap();
-            }
-        });
-        let t3 = thread::spawn(move || {
-            let mut buf = vec![0u8; 4096];
-            while !r3.done() {
-                let a = r3.read(&mut buf).unwrap();
-            }
-        });
-        gt.join().unwrap();
-        t1.join().unwrap();
-        t2.join().unwrap();
-        t3.join().unwrap();
+        gt.join();
         Ok(())
     }
 }

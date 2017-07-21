@@ -117,24 +117,28 @@ impl Graph {
                 }
             }
 
-            for res in self.input.input.read_frames(self.in_frame) {
-                res?;
-                self.process_frame(self.in_frame)?;
-            }
+            let res = self.execute_tc();
 
-            // Flush everything
-            self.process_frame(ptr::null_mut())?;
-            for o in self.outputs.iter_mut() {
-                o.output.write_frame(ptr::null_mut())?;
-            }
-
-            // Write trailers
+            // Write trailers(this frees internal ctx data)
             for o in self.outputs.iter() {
-                match sys::av_write_trailer(o.output.ctx) {
-                    0 => { }
-                    e => return Err(ErrorKind::FFmpeg("failed to write trailer", e).into()),
-                }
+                sys::av_write_trailer(o.output.ctx);
             }
+            res
+        }
+    }
+
+    unsafe fn execute_tc(&mut self) -> Result<()> {
+        for res in self.input.input.read_frames(self.in_frame) {
+            res?;
+            let pres = self.process_frame(self.in_frame);
+            sys::av_frame_unref(self.in_frame);
+            pres?;
+        }
+
+        // Flush everything
+        self.process_frame(ptr::null_mut())?;
+        for o in self.outputs.iter_mut() {
+            o.output.write_frame(ptr::null_mut())?;
         }
         Ok(())
     }
@@ -145,7 +149,6 @@ impl Graph {
             0 => { }
             e => return Err(ErrorKind::FFmpeg("failed to add frame to graph source", e).into()),
         }
-        sys::av_frame_unref(frame);
 
         // Pull out frames from each graph sink, sends them into the codecs for encoding, then
         // writes out the received packets
