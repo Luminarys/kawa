@@ -233,6 +233,9 @@ impl GraphBuilder {
             };
             (*output.codec_ctx).time_base = time_base;
             (*output.stream).time_base = time_base;
+
+            sys::av_dict_copy(&mut (*output.ctx).metadata, (*self.input.input.ctx).metadata, 0);
+
             match sys::avcodec_open2(output.codec_ctx, (*output.codec_ctx).codec, ptr::null_mut()) {
                 0 => { }
                 e => return Err(ErrorKind::FFmpeg("failed to open audio decoder", e).into()),

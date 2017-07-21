@@ -8,7 +8,6 @@ use slog::Logger;
 use serde_json as serde;
 use shout;
 use kaeru;
-use util;
 
 const RB_LEN: usize = 128000;
 
