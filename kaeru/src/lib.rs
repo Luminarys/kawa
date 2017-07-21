@@ -158,25 +158,30 @@ impl Graph {
                     e => return Err(ErrorKind::FFmpeg("failed to get frame from graph sink", e).into()),
                 }
 
-                // Adjust the timestamp(for some reason they're wonky, prob due to frame size resampling
-                // stuff)
-                match output.output.write_frame(self.out_frame) {
-                    Err(e) => {
-                        sys::av_frame_unref(self.out_frame);
-                        return Err(e);
-                    }
-                    _ => { }
-                };
+                { let r = output.output.write_frame(self.out_frame); sys::av_frame_unref(self.out_frame); r}?;
             }
             sys::av_frame_unref(self.out_frame);
         }
         Ok(())
+    }
+
+    unsafe fn flush(&self) {
+        sys::av_buffersrc_add_frame_flags(self.input.ctx, ptr::null_mut(), sys::AV_BUFFERSRC_FLAG_KEEP_REF as i32);
+        for output in self.outputs.iter() {
+            loop {
+                match sys::av_buffersink_get_frame(output.ctx, self.out_frame) {
+                    0 => { sys::av_frame_unref(self.out_frame); }
+                    _ => break
+                }
+            }
+        }
     }
 }
 
 impl Drop for Graph {
     fn drop(&mut self) {
         unsafe {
+            self.flush();
             sys::av_frame_free(&mut self.in_frame);
             sys::av_frame_free(&mut self.out_frame);
         }
@@ -261,17 +266,17 @@ impl GraphBuilder {
             ck_null!(buffersink_ctx);
 
             match sys::av_opt_set_bin(buffersink_ctx as *mut c_void, str_conv!("sample_rates"), mem::transmute(&(*output.codec_ctx).sample_rate),
-                mem::size_of_val(&(*output.codec_ctx).sample_rate) as c_int, sys::AV_OPT_SEARCH_CHILDREN) {
+            mem::size_of_val(&(*output.codec_ctx).sample_rate) as c_int, sys::AV_OPT_SEARCH_CHILDREN) {
                 0 => { }
                 e => return Err(ErrorKind::FFmpeg("failed to configure buffersink sample_rates", e).into()),
             }
             match sys::av_opt_set_bin(buffersink_ctx as *mut c_void, str_conv!("sample_fmts"), mem::transmute(&(*output.codec_ctx).sample_fmt),
-                mem::size_of_val(&(*output.codec_ctx).sample_fmt) as c_int, sys::AV_OPT_SEARCH_CHILDREN) {
+            mem::size_of_val(&(*output.codec_ctx).sample_fmt) as c_int, sys::AV_OPT_SEARCH_CHILDREN) {
                 0 => { }
                 e => return Err(ErrorKind::FFmpeg("failed to configure buffersink sample_fmts", e).into()),
             }
             match sys::av_opt_set_bin(buffersink_ctx as *mut c_void, str_conv!("channel_layouts"), mem::transmute(&(*output.codec_ctx).channel_layout),
-                mem::size_of_val(&(*output.codec_ctx).channel_layout) as c_int, sys::AV_OPT_SEARCH_CHILDREN) {
+            mem::size_of_val(&(*output.codec_ctx).channel_layout) as c_int, sys::AV_OPT_SEARCH_CHILDREN) {
                 0 => { }
                 e => return Err(ErrorKind::FFmpeg("failed to configure buffersink channel_layouts", e).into()),
             }
@@ -580,6 +585,21 @@ impl<'a> Iterator for Frames<'a> {
                 e  => { return Some(Err(ErrorKind::FFmpeg("failed to decode packet", e).into())); }
             }
             self.next()
+        }
+    }
+}
+
+impl<'a> Drop for Frames<'a> {
+    fn drop(&mut self) {
+        // Flush any remaining packets in the codec queue
+        unsafe {
+            sys::avcodec_send_packet(self.i.codec_ctx, ptr::null());
+            loop {
+                match sys::avcodec_receive_frame(self.i.codec_ctx, self.frame) {
+                    0 => { sys::av_frame_unref(self.frame) },
+                    _ => break,
+                }
+            }
         }
     }
 }
