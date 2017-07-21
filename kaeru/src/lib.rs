@@ -145,6 +145,7 @@ impl Graph {
             0 => { }
             e => return Err(ErrorKind::FFmpeg("failed to add frame to graph source", e).into()),
         }
+        sys::av_frame_unref(frame);
 
         // Pull out frames from each graph sink, sends them into the codecs for encoding, then
         // writes out the received packets
@@ -159,11 +160,16 @@ impl Graph {
 
                 // Adjust the timestamp(for some reason they're wonky, prob due to frame size resampling
                 // stuff)
-                output.output.write_frame(self.out_frame)?;
-                sys::av_frame_unref(self.out_frame);
+                match output.output.write_frame(self.out_frame) {
+                    Err(e) => {
+                        sys::av_frame_unref(self.out_frame);
+                        return Err(e);
+                    }
+                    _ => { }
+                };
             }
+            sys::av_frame_unref(self.out_frame);
         }
-        sys::av_frame_unref(frame);
         Ok(())
     }
 }
@@ -505,10 +511,11 @@ impl Output {
             sys::av_packet_rescale_ts(&mut out_pkt,
                                       (*self.codec_ctx).time_base,
                                       (*self.stream).time_base);
-            match sys::av_interleaved_write_frame(self.ctx, &mut out_pkt) {
+            match { let r = sys::av_interleaved_write_frame(self.ctx, &mut out_pkt); sys::av_packet_unref(&mut out_pkt); r } {
                 0 => { }
                 e => return Err(ErrorKind::FFmpeg("failed to write packet", e).into()),
             }
+            sys::av_packet_unref(&mut out_pkt);
         }
         Ok(())
     }
@@ -565,15 +572,13 @@ impl<'a> Iterator for Frames<'a> {
                 if stream == self.i.stream {
                     break;
                 }
-                sys::av_packet_unref(&mut self.packet);
             }
 
-            match sys::avcodec_send_packet(self.i.codec_ctx, &self.packet) {
+            match { let r = sys::avcodec_send_packet(self.i.codec_ctx, &self.packet); sys::av_packet_unref(&mut self.packet); r} {
                 0 => { }
                 e if e == sys::AVERROR_EOF => { return None; }
                 e  => { return Some(Err(ErrorKind::FFmpeg("failed to decode packet", e).into())); }
             }
-            sys::av_packet_unref(&mut self.packet);
             self.next()
         }
     }
