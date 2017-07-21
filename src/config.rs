@@ -29,6 +29,9 @@ pub struct RadioConfig {
     pub port: u16,
     pub user: String,
     pub password: String,
+    pub name: Option<String>,
+    pub description: Option<String>,
+    pub url: Option<String>,
 }
 
 #[derive(Clone, Deserialize)]

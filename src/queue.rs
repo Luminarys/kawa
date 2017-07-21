@@ -134,7 +134,6 @@ impl Queue {
 
     fn random_buffer(&mut self) -> Option<String> {
         let mut body = String::new();
-        let path = String::new();
         let res = reqwest::get(&self.cfg.queue.random.clone())
             .ok()
             .and_then(|mut r| r.read_to_string(&mut body).ok())
@@ -144,7 +143,7 @@ impl Queue {
                 e.path.clone()
             });
         if res.is_some() {
-            info!(self.log, "Using random entry {:?}", path);
+            info!(self.log, "Using random entry {:?}", res);
         }
         res
     }

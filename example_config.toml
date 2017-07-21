@@ -10,6 +10,9 @@ host="host.com"
 port=8000
 user="source"
 password="password"
+name="my radio"
+description="my radio description"
+url="http://myradiostream.com"
 
 [[streams]]
 mount="stream128.mp3"

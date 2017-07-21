@@ -7,7 +7,7 @@ use std::io::Read;
 
 use queue::Queue;
 use api::{ApiMessage, QueuePos};
-use config::Config;
+use config::{Config, RadioConfig};
 use prebuffer::PreBuffer;
 use shout;
 
@@ -17,24 +17,24 @@ struct RadioConn {
 }
 
 impl RadioConn {
-    fn new(host: String,
-           port: u16,
-           user: String,
-           password: String,
-           mount: String,
+    fn new(cfg: RadioConfig,
            format: shout::ShoutFormat,
+           mount: String,
            log: Logger) -> RadioConn {
         let (tx, rx) = mpsc::channel();
 
         let handle = thread::spawn(move || {
             let conn = shout::ShoutConnBuilder::new()
-                .host(host)
-                .port(port)
-                .user(user)
-                .password(password)
+                .host(cfg.host)
+                .port(cfg.port)
+                .user(cfg.user)
+                .password(cfg.password)
                 .mount(mount)
-                .protocol(shout::ShoutProtocol::HTTP)
                 .format(format)
+                .add_meta(shout::ShoutMeta::Name(cfg.name.unwrap_or("no name".to_owned())))
+                .add_meta(shout::ShoutMeta::Description(cfg.description.unwrap_or("no description".to_owned())))
+                .add_meta(shout::ShoutMeta::Url(cfg.url.unwrap_or("no url".to_owned())))
+                .protocol(shout::ShoutProtocol::HTTP)
                 .build()
                 .unwrap();
             play(conn, rx, log);
@@ -86,12 +86,9 @@ pub fn start_streams(cfg: Config,
     let mut rconns: Vec<_> = cfg.streams.iter()
         .map(|stream| {
             let rlog = log.new(o!("mount" => stream.mount.clone()));
-            RadioConn::new(cfg.radio.host.clone(),
-                             cfg.radio.port,
-                             cfg.radio.user.clone(),
-                             cfg.radio.password.clone(),
-                             stream.mount.clone(),
+            RadioConn::new(cfg.radio.clone(),
                              stream.container.clone(),
+                             stream.mount.clone(),
                              rlog)
         })
         .collect();
