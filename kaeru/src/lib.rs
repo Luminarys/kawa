@@ -338,7 +338,7 @@ impl Input {
             let buffer = sys::av_malloc(FFMPEG_BUFFER_SIZE) as *mut u8;
             ck_null!(buffer);
             let opaque = Opaque::new(t);
-            let io_ctx = sys::avio_alloc_context(buffer, 4096, 0, opaque.ptr, Some(read_cb::<T>), None, None);
+            let io_ctx = sys::avio_alloc_context(buffer, FFMPEG_BUFFER_SIZE as c_int, 0, opaque.ptr, Some(read_cb::<T>), None, None);
             ck_null!(io_ctx);
 
             let mut ps = sys::avformat_alloc_context();
