@@ -512,11 +512,27 @@ impl Output {
         }
         Ok(())
     }
+
+    unsafe fn flush_queue(&self) {
+        let mut out_pkt: sys::AVPacket = mem::uninitialized();
+        out_pkt.data = ptr::null_mut();
+        out_pkt.size = 0;
+        sys::av_init_packet(&mut out_pkt);
+        sys::avcodec_send_frame(self.codec_ctx, ptr::null());
+        loop {
+            match sys::avcodec_receive_packet(self.codec_ctx, &mut out_pkt) {
+                0 => { }
+                _ => break
+            }
+        }
+        sys::av_packet_unref(&mut out_pkt);
+    }
 }
 
 impl Drop for Output {
     fn drop(&mut self) {
         unsafe {
+            self.flush_queue();
             sys::av_free((*(*self.ctx).pb).buffer as *mut c_void);
             sys::av_free((*self.ctx).pb as *mut c_void);
             sys::avformat_free_context(self.ctx);
