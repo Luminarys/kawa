@@ -216,9 +216,12 @@ impl GraphBuilder {
         unsafe {
             // Configure the encoder based on the decoder, then initialize it
             let ref input = self.input.input;
-            // OPUS only supports 48kHz sample rates
             if (*output.codec_ctx).codec_id == sys::AVCodecID::AV_CODEC_ID_OPUS {
+                // OPUS only supports 48kHz sample rates
                 (*output.codec_ctx).sample_rate = 48000;
+            } else if (*output.codec_ctx).codec_id == sys::AVCodecID::AV_CODEC_ID_MP3 {
+                // MP3 can't handle 192 kHz, so encode at 44.1
+                (*output.codec_ctx).sample_rate = 44100;
             } else {
                 (*output.codec_ctx).sample_rate = (*input.codec_ctx).sample_rate;
             }
