@@ -131,7 +131,8 @@ impl Graph {
         for res in self.input.input.read_frames(self.in_frame) {
             res?;
             let s = sys::av_q2d((*self.input.input.stream).time_base);
-            println!("Read frame with PTS: {}", s * (*self.in_frame).pkt_pts as f64);
+            let pts = s * (*self.in_frame).pkt_pts as f64;
+
             let pres = self.process_frame(self.in_frame);
             sys::av_frame_unref(self.in_frame);
             pres?;

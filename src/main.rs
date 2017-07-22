@@ -14,6 +14,8 @@ extern crate lazy_static;
 extern crate serde_derive;
 #[macro_use]
 extern crate rouille;
+extern crate amy;
+extern crate httparse;
 
 extern crate kaeru;
 
@@ -24,6 +26,7 @@ mod queue;
 mod util;
 mod ring_buffer;
 mod prebuffer;
+mod broadcast;
 
 use std::env;
 use std::sync::{Arc, Mutex, mpsc};
