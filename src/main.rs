@@ -75,8 +75,9 @@ fn main() {
 
     let queue = Arc::new(Mutex::new(queue::Queue::new(config.clone(), queue_log)));
     let (tx, rx) = mpsc::channel();
+    let btx = broadcast::start(&config, root_log.new(o!("thread" => "broadcast")));
     api::start_api(config.api.clone(), queue.clone(), tx, api_log);
-    radio::start_streams(config.clone(), queue, rx, radio_log);
+    radio::start_streams(config.clone(), queue, rx, btx, radio_log);
 }
 
 #[cfg(test)]

@@ -9,7 +9,8 @@ use queue::Queue;
 use api::{ApiMessage, QueuePos};
 use config::{Config, RadioConfig};
 use prebuffer::PreBuffer;
-use shout;
+use broadcast::Buffer;
+use {amy, shout};
 
 struct RadioConn {
     tx: Sender<PreBuffer>,
@@ -20,6 +21,8 @@ impl RadioConn {
     fn new(cfg: RadioConfig,
            format: shout::ShoutFormat,
            mount: String,
+           mid: usize,
+           btx: amy::Sender<Buffer>,
            log: Logger) -> RadioConn {
         let (tx, rx) = mpsc::channel();
 
@@ -37,7 +40,7 @@ impl RadioConn {
                 .protocol(shout::ShoutProtocol::HTTP)
                 .build()
                 .unwrap();
-            play(conn, rx, log);
+            play(conn, rx, mid, btx, log);
         });
         RadioConn {
             tx: tx,
@@ -50,45 +53,38 @@ impl RadioConn {
     }
 }
 
-pub fn play(conn: shout::ShoutConn, buffer_rec: Receiver<PreBuffer>, log: Logger) {
-    let mut buf = vec![0u8; 4096 * 4];
+pub fn play(conn: shout::ShoutConn, buffer_rec: Receiver<PreBuffer>, mid: usize, btx: amy::Sender<Buffer>, log: Logger) {
     debug!(log, "Awaiting initial buffer");
     let mut pb = buffer_rec.recv().unwrap();
-    // TODO: Actually set metadata, this doesn't work...
     loop {
-        let res = match pb.buffer.read(&mut buf) {
+        let mut buf = vec![0u8; 512];
+        match pb.buffer.read(&mut buf) {
             Ok(0) => {
                 warn!(log, "Starved for data!");
                 thread::sleep(Duration::from_millis(10));
-                Ok(())
             }
-            Ok(a) => conn.send(&buf[0..a]),
+            Ok(a) => btx.send(Buffer::new(mid, buf)).unwrap(),
             Err(_) => {
                 debug!(log, "Buffer drained, waiting for next!");
                 pb = buffer_rec.recv().unwrap();
-                Ok(())
-            }
-        };
-        if let Err(_) = res {
-            warn!(log, "Failed to send data, attempting to reconnect");
-            if let Err(_) = conn.reconnect() {
-                crit!(log, "Failed to reconnect");
             }
         }
-        conn.sync();
     }
 }
 
 pub fn start_streams(cfg: Config,
                      queue: Arc<Mutex<Queue>>,
                      updates: Receiver<ApiMessage>,
-                     log: Logger) {
-    let mut rconns: Vec<_> = cfg.streams.iter()
-        .map(|stream| {
+                     btx: amy::Sender<Buffer>,
+                     log: Logger,) {
+    let mut rconns: Vec<_> = cfg.streams.iter().enumerate()
+        .map(|(id, stream)| {
             let rlog = log.new(o!("mount" => stream.mount.clone()));
             RadioConn::new(cfg.radio.clone(),
                              stream.container.clone(),
                              stream.mount.clone(),
+                             id,
+                             btx.try_clone().unwrap(),
                              rlog)
         })
         .collect();

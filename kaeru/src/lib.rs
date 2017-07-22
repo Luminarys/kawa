@@ -6,9 +6,8 @@ extern crate libc;
 pub use sys::AVCodecID;
 
 use std::ffi::{CString, CStr};
-use std::mem;
 use std::io::{self, Read, Write};
-use std::{slice, ptr};
+use std::{slice, ptr, mem, time, thread};
 use libc::{c_char, c_int, c_void, uint8_t};
 
 error_chain! {
@@ -39,6 +38,7 @@ macro_rules! ck_null {
 }
 
 const FFMPEG_BUFFER_SIZE: usize = 4096;
+const BUFFER_AHEAD: f64 = 10.;
 
 pub struct Graph {
     #[allow(dead_code)] // The graph needs to be kept as context for the filters
@@ -128,10 +128,15 @@ impl Graph {
     }
 
     unsafe fn execute_tc(&mut self) -> Result<()> {
+        let start = time::Instant::now();
         for res in self.input.input.read_frames(self.in_frame) {
             res?;
+
             let s = sys::av_q2d((*self.input.input.stream).time_base);
             let pts = s * (*self.in_frame).pkt_pts as f64;
+            while pts - start.elapsed().as_secs() as f64 > BUFFER_AHEAD {
+                thread::sleep(time::Duration::from_millis(500));
+            }
 
             let pres = self.process_frame(self.in_frame);
             sys::av_frame_unref(self.in_frame);
