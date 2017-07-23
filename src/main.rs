@@ -2,8 +2,6 @@
 extern crate slog;
 extern crate slog_term;
 extern crate slog_async;
-extern crate shout;
-extern crate libc;
 extern crate toml;
 extern crate serde;
 extern crate serde_json;
@@ -14,6 +12,8 @@ extern crate lazy_static;
 extern crate serde_derive;
 #[macro_use]
 extern crate rouille;
+extern crate amy;
+extern crate httparse;
 
 extern crate kaeru;
 
@@ -24,6 +24,7 @@ mod queue;
 mod util;
 mod ring_buffer;
 mod prebuffer;
+mod broadcast;
 
 use std::env;
 use std::sync::{Arc, Mutex, mpsc};
@@ -72,8 +73,9 @@ fn main() {
 
     let queue = Arc::new(Mutex::new(queue::Queue::new(config.clone(), queue_log)));
     let (tx, rx) = mpsc::channel();
+    let btx = broadcast::start(&config, root_log.new(o!("thread" => "broadcast")));
     api::start_api(config.api.clone(), queue.clone(), tx, api_log);
-    radio::start_streams(config.clone(), queue, rx, radio_log);
+    radio::start_streams(config.clone(), queue, rx, btx, radio_log);
 }
 
 #[cfg(test)]

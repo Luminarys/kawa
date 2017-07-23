@@ -1,7 +1,9 @@
 use std::sync::atomic::{AtomicUsize, AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::{thread, io};
+use std::{thread, io, mem};
 use std::time::Duration;
+
+use kaeru;
 
 #[derive(Clone)]
 pub struct RBReader {
@@ -18,7 +20,10 @@ pub struct RBWriter {
 #[derive(Clone)]
 struct RingBuffer {
     cap: usize,
+    header: Arc<Mutex<Vec<u8>>>,
     items: Arc<Mutex<Vec<u8>>>,
+    writing_header: Arc<AtomicBool>,
+    writing_trailer: Arc<AtomicBool>,
     write_pos: Arc<AtomicUsize>,
     read_pos: Arc<AtomicUsize>,
     len: Arc<AtomicUsize>,
@@ -31,6 +36,10 @@ impl RBReader {
 
     pub fn stopped(&self) -> bool {
         self.canceled.load(Ordering::Acquire)
+    }
+
+    pub fn get_header(&self) -> Vec<u8> {
+        mem::replace(&mut *self.rb.header.lock().unwrap(), Vec::new())
     }
 }
 
@@ -78,6 +87,16 @@ impl RBWriter {
     }
 }
 
+impl kaeru::Sink for RBWriter {
+    fn header_written(&mut self) {
+        self.rb.writing_header.store(false, Ordering::Release);
+    }
+
+    fn body_written(&mut self) {
+        self.rb.writing_trailer.store(true, Ordering::Release);
+    }
+}
+
 impl io::Write for RBWriter {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         if self.canceled.load(Ordering::Acquire) {
@@ -86,6 +105,12 @@ impl io::Write for RBWriter {
                 a => Ok(a)
             }
         } else {
+            if self.rb.writing_header.load(Ordering::Acquire) {
+                let mut hb = self.rb.header.lock().unwrap();
+                hb.extend(buf.iter());
+                return Ok(buf.len());
+            }
+
             let mut pos = 0;
             let bl = buf.len();
             while pos != bl {
@@ -120,12 +145,15 @@ pub fn new(size: usize) -> (RBWriter, RBReader) {
         cap: size,
         len: Arc::new(AtomicUsize::new(0)),
         items: Arc::new(Mutex::new(vec![0u8; size])),
+        header: Arc::new(Mutex::new(Vec::with_capacity(128))),
+        writing_header: Arc::new(AtomicBool::new(true)),
+        writing_trailer: Arc::new(AtomicBool::new(false)),
         write_pos: Arc::new(AtomicUsize::new(0)),
         read_pos: Arc::new(AtomicUsize::new(0)),
     };
     let c = Arc::new(AtomicBool::new(false));
 
-    (RBWriter { rb: rb.clone(), canceled: c.clone(), },
+    (RBWriter { rb: rb.clone(), canceled: c.clone() },
      RBReader { rb: rb.clone(), canceled: c.clone(), })
 }
 
