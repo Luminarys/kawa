@@ -7,10 +7,10 @@ use std::io::Read;
 
 use queue::Queue;
 use api::{ApiMessage, QueuePos};
-use config::{Config, RadioConfig};
+use config::Config;
 use prebuffer::PreBuffer;
 use broadcast::Buffer;
-use {amy, shout};
+use amy;
 
 struct RadioConn {
     tx: Sender<PreBuffer>,
@@ -18,29 +18,13 @@ struct RadioConn {
 }
 
 impl RadioConn {
-    fn new(cfg: RadioConfig,
-           format: shout::ShoutFormat,
-           mount: String,
-           mid: usize,
+    fn new(mid: usize,
            btx: amy::Sender<Buffer>,
            log: Logger) -> RadioConn {
         let (tx, rx) = mpsc::channel();
 
         let handle = thread::spawn(move || {
-            let conn = shout::ShoutConnBuilder::new()
-                .host(cfg.host)
-                .port(cfg.port)
-                .user(cfg.user)
-                .password(cfg.password)
-                .mount(mount)
-                .format(format)
-                .add_meta(shout::ShoutMeta::Name(cfg.name.unwrap_or("no name".to_owned())))
-                .add_meta(shout::ShoutMeta::Description(cfg.description.unwrap_or("no description".to_owned())))
-                .add_meta(shout::ShoutMeta::Url(cfg.url.unwrap_or("no url".to_owned())))
-                .protocol(shout::ShoutProtocol::HTTP)
-                .build()
-                .unwrap();
-            play(conn, rx, mid, btx, log);
+            play(rx, mid, btx, log);
         });
         RadioConn {
             tx: tx,
@@ -53,7 +37,7 @@ impl RadioConn {
     }
 }
 
-pub fn play(conn: shout::ShoutConn, buffer_rec: Receiver<PreBuffer>, mid: usize, btx: amy::Sender<Buffer>, log: Logger) {
+pub fn play(buffer_rec: Receiver<PreBuffer>, mid: usize, btx: amy::Sender<Buffer>, log: Logger) {
     debug!(log, "Awaiting initial buffer");
     let mut pb = buffer_rec.recv().unwrap();
     let mut sent_header = false;
@@ -64,7 +48,7 @@ pub fn play(conn: shout::ShoutConn, buffer_rec: Receiver<PreBuffer>, mid: usize,
                 warn!(log, "Starved for data!");
                 thread::sleep(Duration::from_millis(10));
             }
-            Ok(a) => {
+            Ok(_) => {
                 if !sent_header {
                     btx.send(Buffer::new_header(mid, buf, pb.buffer.get_header())).unwrap();
                     sent_header = true;
@@ -89,10 +73,7 @@ pub fn start_streams(cfg: Config,
     let mut rconns: Vec<_> = cfg.streams.iter().enumerate()
         .map(|(id, stream)| {
             let rlog = log.new(o!("mount" => stream.mount.clone()));
-            RadioConn::new(cfg.radio.clone(),
-                             stream.container.clone(),
-                             stream.mount.clone(),
-                             id,
+            RadioConn::new(id,
                              btx.try_clone().unwrap(),
                              rlog)
         })

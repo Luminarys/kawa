@@ -1,12 +1,11 @@
 use std::{mem, fs, thread, sync};
 use std::io::{self, Read};
-use config::Config;
+use config::{Config, Container};
 use reqwest;
 use prebuffer::PreBuffer;
 use ring_buffer;
 use slog::Logger;
 use serde_json as serde;
-use shout;
 use kaeru;
 
 const RB_LEN: usize = 128000;
@@ -156,9 +155,8 @@ impl Queue {
         for s in self.cfg.streams.iter() {
             let (tx, rx) = ring_buffer::new(RB_LEN);
             let ct = match s.container {
-                shout::ShoutFormat::Ogg => "ogg",
-                shout::ShoutFormat::MP3 => "mp3",
-                _ => unreachable!(),
+                Container::Ogg => "ogg",
+                Container::MP3 => "mp3",
             };
             let output = kaeru::Output::new(tx, ct, s.codec, s.bitrate)?;
             gb.add_output(output)?;

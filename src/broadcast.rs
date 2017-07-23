@@ -1,12 +1,12 @@
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::net::{TcpStream, TcpListener};
+use std::net::{TcpStream, TcpListener, Ipv4Addr};
 use std::{time, thread, cmp};
 use std::io::{self, Read, Write};
 
-use {amy, httparse, shout};
+use {amy, httparse};
 use slog::Logger;
 
-use config::{Config, StreamConfig};
+use config::{Config, StreamConfig, Container};
 
 const CLIENT_BUFFER_LEN: usize = 4096;
 const CHUNK_SIZE: usize = 1024;
@@ -80,7 +80,7 @@ impl Broadcaster {
     pub fn new(cfg: &Config, log: Logger) -> io::Result<(Broadcaster, amy::Sender<Buffer>)> {
         let poll = amy::Poller::new()?;
         let mut reg = poll.get_registrar()?;
-        let listener = TcpListener::bind("0.0.0.0:8001")?;
+        let listener = TcpListener::bind((Ipv4Addr::new(0, 0, 0, 0), cfg.radio.port))?;
         listener.set_nonblocking(true)?;
         let lid = reg.register(&listener, amy::Event::Read)?;
         let (tx, rx) = reg.channel()?;
@@ -272,7 +272,7 @@ impl Client {
         let lines = vec![
             format!("HTTP/1.1 200 OK"),
             format!("Server: {}/{}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION")),
-            format!("Content-Type: {}", if let shout::ShoutFormat::MP3 = config.container {
+            format!("Content-Type: {}", if let Container::MP3 = config.container {
                 "audio/mpeg"
             } else {
                 "application/ogg"

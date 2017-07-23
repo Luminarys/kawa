@@ -2,8 +2,6 @@
 extern crate slog;
 extern crate slog_term;
 extern crate slog_async;
-extern crate shout;
-extern crate libc;
 extern crate toml;
 extern crate serde;
 extern crate serde_json;

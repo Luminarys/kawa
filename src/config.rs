@@ -1,4 +1,3 @@
-use shout::ShoutFormat;
 use toml;
 use kaeru::AVCodecID;
 
@@ -18,20 +17,14 @@ pub struct Config {
 pub struct StreamConfig {
     pub mount: String,
     pub bitrate: Option<i64>,
-    pub container: ShoutFormat,
+    pub container: Container,
     pub codec: AVCodecID,
 }
 
 #[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RadioConfig {
-    pub host: String,
     pub port: u16,
-    pub user: String,
-    pub password: String,
-    pub name: Option<String>,
-    pub description: Option<String>,
-    pub url: Option<String>,
 }
 
 #[derive(Clone, Deserialize)]
@@ -44,6 +37,12 @@ pub struct ApiConfig {
 pub struct QueueConfig {
     pub random: String,
     pub fallback: (Arc<Vec<u8>>, String),
+}
+
+#[derive(Clone)]
+pub enum Container {
+    Ogg,
+    MP3,
 }
 
 // Some unfortunate code duplication because you can't derive Deserialize for newtypes in this case
@@ -79,8 +78,8 @@ impl InternalConfig {
         let mut streams = Vec::with_capacity(self.streams.len());
         for s in self.streams {
             let container = match &*s.container {
-                "ogg" => ShoutFormat::Ogg,
-                "mp3" => ShoutFormat::MP3,
+                "ogg" => Container::Ogg,
+                "mp3" => Container::MP3,
                 _ => return Err(format!("Currently, only ogg and mp3 are supported as containers.")),
             };
             let codec = if let Some(c) = s.codec {
@@ -95,9 +94,8 @@ impl InternalConfig {
             } else {
                 // Default to OPUS for Ogg, and MP3 for MP3
                 match container {
-                    ShoutFormat::Ogg => AVCodecID::AV_CODEC_ID_OPUS,
-                    ShoutFormat::MP3 => AVCodecID::AV_CODEC_ID_MP3,
-                    _ => unreachable!(),
+                    Container::Ogg => AVCodecID::AV_CODEC_ID_OPUS,
+                    Container::MP3 => AVCodecID::AV_CODEC_ID_MP3,
                 }
             };
 
