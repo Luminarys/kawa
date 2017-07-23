@@ -9,6 +9,8 @@ use slog::Logger;
 use config::{Config, StreamConfig, Container};
 
 const CLIENT_BUFFER_LEN: usize = 4096;
+// TODO: Back buffer some amount to play to clients
+const BACK_BUFFER_LEN: usize = 4096;
 const CHUNK_SIZE: usize = 1024;
 static CHUNK_HEADER: &'static str = "400\r\n";
 static CHUNK_FOOTER: &'static str = "\r\n";
@@ -144,10 +146,13 @@ impl Broadcaster {
             for id in self.client_mounts[buf.mount].clone() {
                 if {
                     let client = self.clients.get_mut(&id).unwrap();
-                    let r = if let Some(ref h) = buf.header {
-                        client.send_data(h)
-                    } else { Ok(()) };
-                    r.and_then(|_| client.send_data(&buf.data[..]))
+                    // TODO: definitely resolve the header issue
+                    //
+                    //let r = if let Some(ref h) = buf.header {
+                    //    client.send_data(h)
+                    //} else { Ok(()) };
+                    //r.and_then(|_| client.send_data(&buf.data[..]))
+                    client.send_data(&buf.data)
                 }.is_err() {
                     self.remove_client(&id);
                 }

@@ -80,6 +80,7 @@ pub struct Output {
     stream: *mut sys::AVStream,
     _opaque: Opaque,
     header_signal: fn(*mut c_void),
+    body_signal: fn(*mut c_void),
 }
 
 #[derive(Debug, Clone)]
@@ -109,6 +110,7 @@ struct GraphP {
 
 pub trait Sink : Write {
     fn header_written(&mut self);
+    fn body_written(&mut self);
 }
 
 impl Graph {
@@ -128,6 +130,7 @@ impl Graph {
 
             // Write trailers(this frees internal ctx data)
             for o in self.outputs.iter() {
+                (o.output.body_signal)(o.output._opaque.ptr);
                 sys::av_write_trailer(o.output.ctx);
             }
             res
@@ -135,14 +138,16 @@ impl Graph {
     }
 
     unsafe fn execute_tc(&mut self) -> Result<()> {
-        let start = time::Instant::now();
+        // TODO Create callback to check for readiness in Sink
+        let mut cpts = 0;
         for res in self.input.input.read_frames(self.in_frame) {
             res?;
 
             let s = sys::av_q2d((*self.input.input.stream).time_base);
             let pts = s * (*self.in_frame).pkt_pts as f64;
-            while pts - start.elapsed().as_secs() as f64 > BUFFER_AHEAD {
-                thread::sleep(time::Duration::from_millis(500));
+            if (pts as u32) > cpts {
+                thread::sleep(time::Duration::from_millis(1000));
+                cpts += 1;
             }
 
             let pres = self.process_frame(self.in_frame);
@@ -510,6 +515,7 @@ impl Output {
                 codec_ctx,
                 stream,
                 header_signal: sink_header_written::<T>,
+                body_signal: sink_body_written::<T>,
             })
         }
     }
@@ -657,6 +663,13 @@ fn sink_header_written<T: Sink + Sized>(opaque: *mut c_void) {
     unsafe {
         let s = &mut *(opaque as *mut T);
         s.header_written();
+    }
+}
+
+fn sink_body_written<T: Sink + Sized>(opaque: *mut c_void) {
+    unsafe {
+        let s = &mut *(opaque as *mut T);
+        s.body_written();
     }
 }
 

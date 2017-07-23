@@ -23,6 +23,7 @@ struct RingBuffer {
     header: Arc<Mutex<Vec<u8>>>,
     items: Arc<Mutex<Vec<u8>>>,
     writing_header: Arc<AtomicBool>,
+    writing_trailer: Arc<AtomicBool>,
     write_pos: Arc<AtomicUsize>,
     read_pos: Arc<AtomicUsize>,
     len: Arc<AtomicUsize>,
@@ -90,6 +91,10 @@ impl kaeru::Sink for RBWriter {
     fn header_written(&mut self) {
         self.rb.writing_header.store(false, Ordering::Release);
     }
+
+    fn body_written(&mut self) {
+        self.rb.writing_trailer.store(true, Ordering::Release);
+    }
 }
 
 impl io::Write for RBWriter {
@@ -142,6 +147,7 @@ pub fn new(size: usize) -> (RBWriter, RBReader) {
         items: Arc::new(Mutex::new(vec![0u8; size])),
         header: Arc::new(Mutex::new(Vec::with_capacity(128))),
         writing_header: Arc::new(AtomicBool::new(true)),
+        writing_trailer: Arc::new(AtomicBool::new(false)),
         write_pos: Arc::new(AtomicUsize::new(0)),
         read_pos: Arc::new(AtomicUsize::new(0)),
     };
