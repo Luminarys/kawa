@@ -79,6 +79,7 @@ pub struct Output {
     codec_ctx: *mut sys::AVCodecContext,
     stream: *mut sys::AVStream,
     _opaque: Opaque,
+    header_signal: fn(*mut c_void),
 }
 
 #[derive(Debug, Clone)]
@@ -106,13 +107,19 @@ struct GraphP {
     ptr: *mut sys::AVFilterGraph,
 }
 
+pub trait Sink : Write {
+    fn header_written(&mut self);
+}
+
 impl Graph {
     pub fn run(mut self) -> Result<()> {
         unsafe {
             // Write header
             for o in self.outputs.iter() {
                 match sys::avformat_write_header(o.output.ctx, ptr::null_mut()) {
-                    0 => { }
+                    0 => {
+                        (o.output.header_signal)(o.output._opaque.ptr);
+                    }
                     e => return Err(ErrorKind::FFmpeg("failed to write header", e).into()),
                 }
             }
@@ -467,7 +474,7 @@ impl Drop for Input {
 }
 
 impl Output {
-    pub fn new<T: Write + Send + Sized>(t: T, container: &str, codec_id: sys::AVCodecID, bit_rate: Option<i64>) -> Result<Output> {
+    pub fn new<T: Sink + Send + Sized>(t: T, container: &str, codec_id: sys::AVCodecID, bit_rate: Option<i64>) -> Result<Output> {
         unsafe {
             let buffer = sys::av_malloc(4096) as *mut u8;
             ck_null!(buffer);
@@ -502,6 +509,7 @@ impl Output {
                 _opaque: opaque,
                 codec_ctx,
                 stream,
+                header_signal: sink_header_written::<T>,
             })
         }
     }
@@ -630,7 +638,7 @@ unsafe extern fn read_cb<T: Read + Sized>(opaque: *mut c_void, buf: *mut uint8_t
     }
 }
 
-unsafe extern fn write_cb<T: Write + Sized>(opaque: *mut c_void, buf: *mut uint8_t, len: c_int) -> c_int {
+unsafe extern fn write_cb<T: Sink + Sized>(opaque: *mut c_void, buf: *mut uint8_t, len: c_int) -> c_int {
     let writer = &mut *(opaque as *mut T);
     let s = slice::from_raw_parts(buf, len as usize);
     match writer.write(s) {
@@ -642,6 +650,13 @@ unsafe extern fn write_cb<T: Write + Sized>(opaque: *mut c_void, buf: *mut uint8
                 sys::AVERROR_EXIT
             }
         }
+    }
+}
+
+fn sink_header_written<T: Sink + Sized>(opaque: *mut c_void) {
+    unsafe {
+        let s = &mut *(opaque as *mut T);
+        s.header_written();
     }
 }
 

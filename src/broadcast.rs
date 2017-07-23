@@ -22,7 +22,7 @@ pub struct Broadcaster {
     /// Map from amy ID -> client
     clients: HashMap<usize, Client>,
     /// Vec of mount names, idx is mount id
-    streams: Vec<StreamConfig>,
+    streams: Vec<Stream>,
     /// vec where idx: mount id , val: set of clients attached to mount id
     client_mounts: Vec<HashSet<usize>>,
     listener: TcpListener,
@@ -32,6 +32,7 @@ pub struct Broadcaster {
 
 #[derive(Clone, Debug)]
 pub struct Buffer {
+    header: Option<Vec<u8>>,
     data: Vec<u8>,
     mount: usize
 }
@@ -47,6 +48,11 @@ struct Incoming {
     conn: TcpStream,
     buf: [u8; 1024],
     len: usize,
+}
+
+struct Stream {
+    config: StreamConfig,
+    header: Vec<u8>,
 }
 
 enum Chunker {
@@ -78,6 +84,10 @@ impl Broadcaster {
         listener.set_nonblocking(true)?;
         let lid = reg.register(&listener, amy::Event::Read)?;
         let (tx, rx) = reg.channel()?;
+        let mut streams = Vec::new();
+        for config in cfg.streams.iter().cloned() {
+            streams.push(Stream { config, header: Vec::new(), })
+        }
 
         Ok((Broadcaster {
             poll,
@@ -85,7 +95,7 @@ impl Broadcaster {
             data: rx,
             incoming: HashMap::new(),
             clients: HashMap::new(),
-            streams: cfg.streams.clone(),
+            streams,
             client_mounts: vec![HashSet::new(); cfg.streams.len()],
             listener,
             lid,
@@ -134,10 +144,16 @@ impl Broadcaster {
             for id in self.client_mounts[buf.mount].clone() {
                 if {
                     let client = self.clients.get_mut(&id).unwrap();
-                    client.send_data(&buf.data[..])
+                    let r = if let Some(ref h) = buf.header {
+                        client.send_data(h)
+                    } else { Ok(()) };
+                    r.and_then(|_| client.send_data(&buf.data[..]))
                 }.is_err() {
                     self.remove_client(&id);
                 }
+            }
+            if let Some(h) = buf.header {
+                self.streams[buf.mount].header = h;
             }
         }
     }
@@ -147,13 +163,12 @@ impl Broadcaster {
             Ok(Some(mount)) => {
                 let inc = self.incoming.remove(&id).unwrap();
                 for (mid, stream) in self.streams.iter().enumerate() {
-                    if mount.ends_with(&stream.mount) {
-                        debug!(self.log, "Adding a client to stream {}", stream.mount);
+                    if mount.ends_with(&stream.config.mount) {
+                        debug!(self.log, "Adding a client to stream {}", stream.config.mount);
                         // Swap to write only mode
                         self.reg.reregister(id, &inc.conn, amy::Event::Write).unwrap();
                         let mut client = Client::new(inc.conn);
-                        if client.write_resp(stream).is_ok() {
-                            // TODO:Write out the current header: Store this somewhere?
+                        if client.write_resp(&stream.config).and_then(|_| client.send_data(&stream.header)).is_ok() {
                             self.client_mounts[mid].insert(id);
                             self.clients.insert(id, client);
                         } else {
@@ -193,7 +208,11 @@ impl Broadcaster {
 
 impl Buffer {
     pub fn new(mount: usize, data: Vec<u8>) -> Buffer {
-        Buffer { mount, data }
+        Buffer { mount, data, header: None }
+    }
+
+    pub fn new_header(mount: usize, data: Vec<u8>, header: Vec<u8>) -> Buffer {
+        Buffer { mount, data, header: Some(header) }
     }
 }
 

@@ -56,6 +56,7 @@ impl RadioConn {
 pub fn play(conn: shout::ShoutConn, buffer_rec: Receiver<PreBuffer>, mid: usize, btx: amy::Sender<Buffer>, log: Logger) {
     debug!(log, "Awaiting initial buffer");
     let mut pb = buffer_rec.recv().unwrap();
+    let mut sent_header = false;
     loop {
         let mut buf = vec![0u8; 512];
         match pb.buffer.read(&mut buf) {
@@ -63,10 +64,18 @@ pub fn play(conn: shout::ShoutConn, buffer_rec: Receiver<PreBuffer>, mid: usize,
                 warn!(log, "Starved for data!");
                 thread::sleep(Duration::from_millis(10));
             }
-            Ok(a) => btx.send(Buffer::new(mid, buf)).unwrap(),
+            Ok(a) => {
+                if !sent_header {
+                    btx.send(Buffer::new_header(mid, buf, pb.buffer.get_header())).unwrap();
+                    sent_header = true;
+                } else {
+                    btx.send(Buffer::new(mid, buf)).unwrap();
+                }
+            }
             Err(_) => {
                 debug!(log, "Buffer drained, waiting for next!");
                 pb = buffer_rec.recv().unwrap();
+                sent_header = false;
             }
         }
     }
