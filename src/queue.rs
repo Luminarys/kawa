@@ -119,7 +119,7 @@ impl Queue {
     }
 
     fn next_buffer(&mut self) -> Option<String> {
-        self.next_queue_buffer().or(self.random_buffer())
+        self.next_queue_buffer().or_else(|| self.random_buffer())
     }
 
     fn next_queue_buffer(&mut self) -> Option<String> {
@@ -142,7 +142,7 @@ impl Queue {
                 e.path.clone()
             });
         if res.is_some() {
-            info!(self.log, "Using random entry {:?}", res);
+            info!(self.log, "Using random entry {:?}", res.as_ref().unwrap());
         }
         res
     }
