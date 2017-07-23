@@ -38,7 +38,7 @@ macro_rules! ck_null {
 }
 
 const FFMPEG_BUFFER_SIZE: usize = 4096;
-const BUFFER_AHEAD: f64 = 10.;
+const BUFFER_AHEAD: u32 = 10;
 
 pub struct Graph {
     #[allow(dead_code)] // The graph needs to be kept as context for the filters
@@ -145,7 +145,7 @@ impl Graph {
 
             let s = sys::av_q2d((*self.input.input.stream).time_base);
             let pts = s * (*self.in_frame).pkt_pts as f64;
-            if (pts as u32) > cpts {
+            if (pts as u32) > cpts + BUFFER_AHEAD {
                 thread::sleep(time::Duration::from_millis(1000));
                 cpts += 1;
             }
