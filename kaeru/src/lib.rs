@@ -142,6 +142,7 @@ impl Graph {
         // TODO Create callback to check for readiness in Sink
         let mut cpts = 0;
         let mut last_pts = time::Instant::now();
+        let mut init = false;
         for res in self.input.input.read_frames(self.in_frame) {
             res?;
 
@@ -152,6 +153,11 @@ impl Graph {
                 let now = time::Instant::now();
                 if next_pts > now {
                     thread::sleep(next_pts - now);
+                } else if !init {
+                    // This is hacky, but it solves the issue of overbuffering
+                    // TODO: Figure out a better solution
+                    thread::sleep(time::Duration::from_millis(300));
+                    init = true;
                 }
                 last_pts = time::Instant::now();
                 cpts += 1;
