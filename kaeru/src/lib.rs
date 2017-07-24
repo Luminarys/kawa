@@ -80,6 +80,7 @@ pub struct Output {
     stream: *mut sys::AVStream,
     _opaque: Opaque,
     header_signal: fn(*mut c_void),
+    packet_signal: fn(*mut c_void),
     body_signal: fn(*mut c_void),
 }
 
@@ -109,8 +110,9 @@ struct GraphP {
 }
 
 pub trait Sink : Write {
-    fn header_written(&mut self);
-    fn body_written(&mut self);
+    fn header_written(&mut self) { }
+    fn packet_written(&mut self) { }
+    fn body_written(&mut self) { }
 }
 
 impl Graph {
@@ -140,13 +142,19 @@ impl Graph {
     unsafe fn execute_tc(&mut self) -> Result<()> {
         // TODO Create callback to check for readiness in Sink
         let mut cpts = 0;
+        let mut last_pts = time::Instant::now();
         for res in self.input.input.read_frames(self.in_frame) {
             res?;
 
             let s = sys::av_q2d((*self.input.input.stream).time_base);
             let pts = s * (*self.in_frame).pkt_pts as f64;
-            if (pts as u32) > cpts + BUFFER_AHEAD {
-                thread::sleep(time::Duration::from_millis(1000));
+            if (pts as u32) > cpts {
+                let next_pts = last_pts + time::Duration::from_secs(1);
+                let now = time::Instant::now();
+                if next_pts > now {
+                    thread::sleep(next_pts - now);
+                }
+                last_pts = time::Instant::now();
                 cpts += 1;
             }
 
@@ -515,6 +523,7 @@ impl Output {
                 codec_ctx,
                 stream,
                 header_signal: sink_header_written::<T>,
+                packet_signal: sink_packet_written::<T>,
                 body_signal: sink_body_written::<T>,
             })
         }
@@ -545,6 +554,9 @@ impl Output {
                 0 => { }
                 e => return Err(ErrorKind::FFmpeg("failed to write packet", e).into()),
             }
+            // TODO: This is not very robust, need to evaluate write_frame functionality
+            sys::avio_flush((*self.ctx).pb);
+            (self.packet_signal)(self._opaque.ptr);
             sys::av_packet_unref(&mut out_pkt);
         }
         Ok(())
@@ -663,6 +675,13 @@ fn sink_header_written<T: Sink + Sized>(opaque: *mut c_void) {
     unsafe {
         let s = &mut *(opaque as *mut T);
         s.header_written();
+    }
+}
+
+fn sink_packet_written<T: Sink + Sized>(opaque: *mut c_void) {
+    unsafe {
+        let s = &mut *(opaque as *mut T);
+        s.packet_written();
     }
 }
 
