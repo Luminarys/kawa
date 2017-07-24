@@ -40,6 +40,7 @@ impl RadioConn {
 pub fn play(buffer_rec: Receiver<PreBuffer>, mid: usize, btx: amy::Sender<Buffer>, log: Logger) {
     debug!(log, "Awaiting initial buffer");
     let mut pb = buffer_rec.recv().unwrap();
+    pb.buffer.start();
     let mut sent_header = false;
     loop {
         let mut buf = vec![0u8; 512];
@@ -59,6 +60,7 @@ pub fn play(buffer_rec: Receiver<PreBuffer>, mid: usize, btx: amy::Sender<Buffer
             Err(_) => {
                 debug!(log, "Buffer drained, waiting for next!");
                 pb = buffer_rec.recv().unwrap();
+                pb.buffer.start();
                 sent_header = false;
             }
         }

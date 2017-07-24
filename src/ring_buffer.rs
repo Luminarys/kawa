@@ -7,29 +7,33 @@ use kaeru;
 
 #[derive(Clone)]
 pub struct RBReader {
-    rb: RingBuffer,
+    rb: Arc<RingBuffer>,
     canceled: Arc<AtomicBool>,
 }
 
 #[derive(Clone)]
 pub struct RBWriter {
-    rb: RingBuffer,
+    rb: Arc<RingBuffer>,
     canceled: Arc<AtomicBool>,
 }
 
-#[derive(Clone)]
 struct RingBuffer {
     cap: usize,
-    header: Arc<Mutex<Vec<u8>>>,
-    items: Arc<Mutex<Vec<u8>>>,
-    writing_header: Arc<AtomicBool>,
-    writing_trailer: Arc<AtomicBool>,
-    write_pos: Arc<AtomicUsize>,
-    read_pos: Arc<AtomicUsize>,
-    len: Arc<AtomicUsize>,
+    started: AtomicBool,
+    header: Mutex<Vec<u8>>,
+    items: Mutex<Vec<u8>>,
+    writing_header: AtomicBool,
+    writing_trailer: AtomicBool,
+    write_pos: AtomicUsize,
+    read_pos: AtomicUsize,
+    len: AtomicUsize,
 }
 
 impl RBReader {
+    pub fn start(&self) {
+        self.rb.started.store(true, Ordering::Release);
+    }
+
     pub fn done(&self) -> bool {
         self.stopped() && self.rb.len() == 0
     }
@@ -114,7 +118,7 @@ impl io::Write for RBWriter {
             let mut pos = 0;
             let bl = buf.len();
             while pos != bl {
-                while self.rb.len() == self.rb.cap {
+                while self.rb.len() == self.rb.cap || !self.rb.started.load(Ordering::Acquire) {
                     thread::sleep(Duration::from_millis(5));
                     if self.done() {
                         return Ok(pos);
@@ -141,16 +145,17 @@ impl Drop for RBWriter {
 unsafe impl Send for RBWriter { }
 
 pub fn new(size: usize) -> (RBWriter, RBReader) {
-    let rb = RingBuffer {
+    let rb = Arc::new(RingBuffer {
         cap: size,
-        len: Arc::new(AtomicUsize::new(0)),
-        items: Arc::new(Mutex::new(vec![0u8; size])),
-        header: Arc::new(Mutex::new(Vec::with_capacity(128))),
-        writing_header: Arc::new(AtomicBool::new(true)),
-        writing_trailer: Arc::new(AtomicBool::new(false)),
-        write_pos: Arc::new(AtomicUsize::new(0)),
-        read_pos: Arc::new(AtomicUsize::new(0)),
-    };
+        len: AtomicUsize::new(0),
+        items: Mutex::new(vec![0u8; size]),
+        header: Mutex::new(Vec::with_capacity(128)),
+        writing_header: AtomicBool::new(true),
+        writing_trailer: AtomicBool::new(false),
+        started: AtomicBool::new(false),
+        write_pos: AtomicUsize::new(0),
+        read_pos: AtomicUsize::new(0),
+    });
     let c = Arc::new(AtomicBool::new(false));
 
     (RBWriter { rb: rb.clone(), canceled: c.clone() },
@@ -159,7 +164,7 @@ pub fn new(size: usize) -> (RBWriter, RBReader) {
 
 
 impl RingBuffer {
-    pub fn try_read(&mut self, buf: &mut [u8]) -> usize {
+    pub fn try_read(&self, buf: &mut [u8]) -> usize {
         let l = self.len();
         let amnt = if buf.len() > l {
             self.do_read(&mut buf[..l])
@@ -170,7 +175,7 @@ impl RingBuffer {
         amnt
     }
 
-    fn do_read(&mut self, buf: &mut [u8]) -> usize {
+    fn do_read(&self, buf: &mut [u8]) -> usize {
         let mut pos = 0;
         let bl = buf.len();
         let items = self.items.lock().unwrap();
@@ -207,7 +212,7 @@ impl RingBuffer {
         return pos;
     }
 
-    pub fn try_write(&mut self, buf: &[u8]) -> usize {
+    pub fn try_write(&self, buf: &[u8]) -> usize {
         let mr = self.cap - self.len();
         let amnt = if buf.len() > mr {
             self.do_write(&buf[..mr])
@@ -218,7 +223,7 @@ impl RingBuffer {
         amnt
     }
 
-    fn do_write(&mut self, buf: &[u8]) -> usize {
+    fn do_write(&self, buf: &[u8]) -> usize {
         let mut pos = 0;
         let bl = buf.len();
         let mut items = self.items.lock().unwrap();

@@ -38,7 +38,6 @@ macro_rules! ck_null {
 }
 
 const FFMPEG_BUFFER_SIZE: usize = 4096;
-const BUFFER_AHEAD: u32 = 10;
 
 pub struct Graph {
     #[allow(dead_code)] // The graph needs to be kept as context for the filters

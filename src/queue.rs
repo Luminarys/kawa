@@ -1,5 +1,5 @@
 use std::{mem, fs, thread, sync};
-use std::io::{self, Read};
+use std::io::{self, Read, BufReader};
 use config::{Config, Container};
 use reqwest;
 use prebuffer::PreBuffer;
@@ -9,6 +9,8 @@ use serde_json as serde;
 use kaeru;
 
 const RB_LEN: usize = 128000;
+// 256 KiB nuffer
+const INPUT_BUF_LEN: usize = 262144;
 
 pub struct Queue {
     pub next: Option<Vec<PreBuffer>>,
@@ -149,7 +151,7 @@ impl Queue {
 
     fn initiate_transcode<T: io::Read + Send>(&mut self, s: T, container: &str) -> kaeru::Result<Vec<PreBuffer>> {
         let mut prebufs = Vec::new();
-        let input = kaeru::Input::new(s, container)?;
+        let input = kaeru::Input::new(BufReader::with_capacity(INPUT_BUF_LEN, s), container)?;
         let metadata = sync::Arc::new(input.metadata());
         let mut gb = kaeru::GraphBuilder::new(input)?;
         for s in self.cfg.streams.iter() {
