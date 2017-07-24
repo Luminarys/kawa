@@ -9,8 +9,7 @@ use slog::Logger;
 use config::{Config, StreamConfig, Container};
 
 const CLIENT_BUFFER_LEN: usize = 4096;
-// TODO: Back buffer some amount to play to clients
-const BACK_BUFFER_LEN: usize = 4096;
+const BACK_BUFFER_LEN: usize = 131072;
 const CHUNK_SIZE: usize = 1024;
 static CHUNK_HEADER: &'static str = "400\r\n";
 static CHUNK_FOOTER: &'static str = "\r\n";
@@ -55,6 +54,7 @@ struct Incoming {
 struct Stream {
     config: StreamConfig,
     header: Vec<u8>,
+    buffer: VecDeque<u8>,
 }
 
 enum Chunker {
@@ -88,7 +88,7 @@ impl Broadcaster {
         let (tx, rx) = reg.channel()?;
         let mut streams = Vec::new();
         for config in cfg.streams.iter().cloned() {
-            streams.push(Stream { config, header: Vec::new(), })
+            streams.push(Stream { config, header: Vec::new(), buffer: VecDeque::with_capacity(BACK_BUFFER_LEN) })
         }
 
         Ok((Broadcaster {
@@ -160,6 +160,11 @@ impl Broadcaster {
             if let Some(h) = buf.header {
                 self.streams[buf.mount].header = h;
             }
+            let ref mut sb = self.streams[buf.mount].buffer;
+            sb.extend(buf.data.iter());
+            while sb.len() > BACK_BUFFER_LEN {
+                sb.pop_front();
+            }
         }
     }
 
@@ -173,7 +178,13 @@ impl Broadcaster {
                         // Swap to write only mode
                         self.reg.reregister(id, &inc.conn, amy::Event::Write).unwrap();
                         let mut client = Client::new(inc.conn);
-                        if client.write_resp(&stream.config).and_then(|_| client.send_data(&stream.header)).is_ok() {
+                        // Send header, and buffered data
+                        if client.write_resp(&stream.config)
+                            .and_then(|_| client.send_data(&stream.header))
+                            .and_then(|_| client.send_data(&stream.buffer.as_slices().0))
+                            .and_then(|_| client.send_data(&stream.buffer.as_slices().1))
+                            .is_ok()
+                        {
                             self.client_mounts[mid].insert(id);
                             self.clients.insert(id, client);
                         } else {
@@ -296,6 +307,10 @@ impl Client {
     }
 
     fn send_data(&mut self, data: &[u8]) -> Result<(), ()> {
+        if data.len() == 0 {
+            return Ok(());
+        }
+
         self.last_action = time::Instant::now();
         // Attempt to flush buffer first
         match self.flush_buffer() {

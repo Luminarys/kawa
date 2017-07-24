@@ -1,4 +1,4 @@
-use std::{mem, fs, thread, sync};
+use std::{mem, fs, thread, sync, time};
 use std::io::{self, Read, BufReader};
 use config::{Config, Container};
 use reqwest;
@@ -13,8 +13,9 @@ const RB_LEN: usize = 128000;
 const INPUT_BUF_LEN: usize = 262144;
 
 pub struct Queue {
-    pub next: Option<Vec<PreBuffer>>,
+    pub next: Option<(time::Duration, Vec<PreBuffer>)>,
     pub entries: Vec<QueueEntry>,
+    pub dur: time::Duration,
     counter: usize,
     cfg: Config,
     log: Logger,
@@ -34,6 +35,7 @@ impl Queue {
             cfg: cfg,
             log: log,
             counter: 0,
+            dur: time::Duration::from_secs(0),
         }
     }
 
@@ -79,7 +81,9 @@ impl Queue {
         if self.next.is_none() {
             self.start_next_tc();
         }
-        return mem::replace(&mut self.next, None).unwrap();
+        let ne = mem::replace(&mut self.next, None).unwrap();
+        self.dur = ne.0;
+        return ne.1;
     }
 
     pub fn start_next_tc(&mut self) {
@@ -149,9 +153,10 @@ impl Queue {
         res
     }
 
-    fn initiate_transcode<T: io::Read + Send>(&mut self, s: T, container: &str) -> kaeru::Result<Vec<PreBuffer>> {
+    fn initiate_transcode<T: io::Read + Send>(&mut self, s: T, container: &str) -> kaeru::Result<(time::Duration, Vec<PreBuffer>)> {
         let mut prebufs = Vec::new();
         let input = kaeru::Input::new(BufReader::with_capacity(INPUT_BUF_LEN, s), container)?;
+        let dur = input.duration();
         let metadata = sync::Arc::new(input.metadata());
         let mut gb = kaeru::GraphBuilder::new(input)?;
         for s in self.cfg.streams.iter() {
@@ -176,6 +181,6 @@ impl Queue {
             debug!(log, "Completed");
         });
         self.counter += 1;
-        Ok(prebufs)
+        Ok((dur, prebufs))
     }
 }

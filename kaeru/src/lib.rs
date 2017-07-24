@@ -142,7 +142,6 @@ impl Graph {
         // TODO Create callback to check for readiness in Sink
         let mut cpts = 0;
         let mut last_pts = time::Instant::now();
-        let mut init = false;
         for res in self.input.input.read_frames(self.in_frame) {
             res?;
 
@@ -153,11 +152,6 @@ impl Graph {
                 let now = time::Instant::now();
                 if next_pts > now {
                     thread::sleep(next_pts - now);
-                } else if !init {
-                    // This is hacky, but it solves the issue of overbuffering
-                    // TODO: Figure out a better solution
-                    thread::sleep(time::Duration::from_millis(300));
-                    init = true;
                 }
                 last_pts = time::Instant::now();
                 cpts += 1;
@@ -442,6 +436,17 @@ impl Input {
         }
     }
 
+    pub fn duration(&self) -> time::Duration {
+        unsafe {
+            let s = sys::av_q2d((*self.stream).time_base);
+            let dur = s * (*self.stream).duration as f64;
+            let sd = dur as u64;
+            let dur_i = time::Duration::from_secs(sd);
+            let dur_f = time::Duration::from_millis(((dur - sd as f64) * 100.) as u64);
+            dur_i + dur_f
+        }
+    }
+
     pub fn metadata(&self) -> Metadata {
         unsafe {
             Metadata {
@@ -555,7 +560,7 @@ impl Output {
             sys::av_packet_rescale_ts(&mut out_pkt,
                                       (*self.codec_ctx).time_base,
                                       (*self.stream).time_base);
-            match { let r = sys::av_interleaved_write_frame(self.ctx, &mut out_pkt); sys::av_packet_unref(&mut out_pkt); r } {
+            match { let r = sys::av_write_frame(self.ctx, &mut out_pkt); sys::av_packet_unref(&mut out_pkt); r } {
                 0 => { }
                 e => return Err(ErrorKind::FFmpeg("failed to write packet", e).into()),
             }

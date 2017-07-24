@@ -1,3 +1,5 @@
+#![cfg_attr(nightly, feature(alloc_system))]
+
 #[macro_use]
 extern crate slog;
 extern crate slog_term;

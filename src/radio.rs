@@ -1,7 +1,7 @@
 use std::sync::{Arc, Mutex};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
-use std::time::Duration;
+use std::time::{Instant, Duration};
 use slog::Logger;
 use std::io::Read;
 
@@ -94,6 +94,8 @@ pub fn start_streams(cfg: Config,
             // ordering.
             rconn.replace_buffer(pb.clone());
         }
+        let end_time = Instant::now() + queue.lock().unwrap().dur;
+
         debug!(log, "Removing queue head");
         queue.lock().unwrap().pop_head();
         debug!(log, "Entering main loop");
@@ -104,6 +106,10 @@ pub fn start_streams(cfg: Config,
             // If any prebuffer completes, just move on to next song. We want to minimize downtime
             // even if it means some songs get cut off early
             if prebuffers.iter().any(|pb| pb.buffer.done()) {
+                let now = Instant::now();
+                if end_time > now {
+                    thread::sleep(end_time - now);
+                }
                 break;
             } else {
                 if let Ok(msg) = updates.try_recv() {

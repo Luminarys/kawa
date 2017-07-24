@@ -109,6 +109,13 @@ impl io::Write for RBWriter {
                 a => Ok(a)
             }
         } else {
+            while !self.rb.started.load(Ordering::Acquire) {
+                thread::sleep(Duration::from_millis(5));
+                if self.done() {
+                    return Ok(0);
+                }
+            }
+
             if self.rb.writing_header.load(Ordering::Acquire) {
                 let mut hb = self.rb.header.lock().unwrap();
                 hb.extend(buf.iter());
@@ -118,7 +125,7 @@ impl io::Write for RBWriter {
             let mut pos = 0;
             let bl = buf.len();
             while pos != bl {
-                while self.rb.len() == self.rb.cap || !self.rb.started.load(Ordering::Acquire) {
+                while self.rb.len() == self.rb.cap {
                     thread::sleep(Duration::from_millis(5));
                     if self.done() {
                         return Ok(pos);
