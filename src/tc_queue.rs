@@ -1,5 +1,5 @@
 use std::sync::{Arc, Mutex};
-use std::{thread, mem, io};
+use std::{thread, mem, io, time};
 use std::collections::VecDeque;
 
 use kaeru::Sink;
@@ -51,7 +51,7 @@ impl io::Write for QW {
                     break;
                 }
                 drop(q);
-                thread::yield_now();
+                thread::sleep(time::Duration::from_millis(15));
             }
         } else if self.queue.lock().unwrap().done {
             return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "Canceled!"));
@@ -118,7 +118,7 @@ impl QR {
                 return Some(b);
             }
             drop(q);
-            thread::yield_now();
+            thread::sleep(time::Duration::from_millis(10));
         }
     }
 }
