@@ -190,6 +190,7 @@ impl Broadcaster {
                         if client.write_resp(&stream.config)
                             .and_then(|_| client.send_data(&stream.header))
                             .and_then(|_| {
+                                // TODO: Consider edge case where the header is double sent
                                 for buf in stream.buffer.iter() {
                                     client.send_data(buf)?
                                 }
