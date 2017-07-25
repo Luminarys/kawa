@@ -68,9 +68,6 @@ pub fn start_streams(cfg: Config,
         })
         .collect();
 
-    debug!(log, "Obtaining initial transcode buffer");
-    queue.lock().unwrap().start_next_tc();
-    thread::sleep(Duration::from_millis(100));
     loop {
         debug!(log, "Extracting next buffer");
         let prebuffers = queue.lock().unwrap().get_next_tc();
@@ -81,7 +78,7 @@ pub fn start_streams(cfg: Config,
             // ordering.
             rconn.replace_buffer(pb.clone());
         }
-        let end_time = Instant::now() + queue.lock().unwrap().dur;
+        let end_time = Instant::now() + *queue.lock().unwrap().np().duration();
 
         debug!(log, "Removing queue head");
         queue.lock().unwrap().pop_head();

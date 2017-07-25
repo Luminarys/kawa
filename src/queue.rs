@@ -1,5 +1,6 @@
 use std::{mem, fs, thread, sync, time};
 use std::io::{self, Read, BufReader};
+use std::collections::VecDeque;
 use config::{Config, Container};
 use reqwest;
 use prebuffer::PreBuffer;
@@ -12,35 +13,52 @@ use kaeru;
 const INPUT_BUF_LEN: usize = 262144;
 
 pub struct Queue {
-    pub next: Option<(time::Duration, Vec<PreBuffer>)>,
-    pub entries: Vec<QueueEntry>,
-    pub dur: time::Duration,
+    entries: VecDeque<QueueEntry>,
+    next: QueueBuffer,
+    np: QueueBuffer,
     counter: usize,
     cfg: Config,
     log: Logger,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Default, Serialize)]
 pub struct QueueEntry {
     pub id: i64,
     pub path: String,
 }
 
+#[derive(Default)]
+pub struct QueueBuffer {
+    entry: QueueEntry,
+    dur: time::Duration,
+    bufs: Vec<PreBuffer>,
+}
+
 impl Queue {
     pub fn new(cfg: Config, log: Logger) -> Queue {
-        Queue {
-            next: None,
-            entries: Vec::new(),
+        let mut q = Queue {
+            np: Default::default(),
+            next: Default::default(),
+            entries: VecDeque::new(),
             cfg: cfg,
             log: log,
             counter: 0,
-            dur: time::Duration::from_secs(0),
-        }
+        };
+        q.start_next_tc();
+        q
+    }
+
+    pub fn np(&self) -> &QueueBuffer {
+        &self.np
+    }
+
+    pub fn entries(&self) -> &VecDeque<QueueEntry> {
+        &self.entries
     }
 
     pub fn push(&mut self, qe: QueueEntry) {
         debug!(self.log, "Inserting {:?} into queue tail!", qe);
-        self.entries.push(qe);
+        self.entries.push_back(qe);
         if self.entries.len() == 1 {
             self.start_next_tc();
         }
@@ -48,23 +66,19 @@ impl Queue {
 
     pub fn push_head(&mut self, qe: QueueEntry) {
         debug!(self.log, "Inserting {:?} into queue head!", qe);
-        self.entries.insert(0, qe);
+        self.entries.push_front(qe);
         self.start_next_tc();
     }
 
     pub fn pop(&mut self) {
-        debug!(self.log, "Removing {:?} from queue tail!", self.entries.pop());
+        debug!(self.log, "Removing {:?} from queue tail!", self.entries.pop_back());
         if self.entries.len() == 0 {
             self.start_next_tc();
         }
     }
 
     pub fn pop_head(&mut self) {
-        let res = if !self.entries.is_empty() {
-            Some(self.entries.remove(0))
-        } else {
-            None
-        };
+        let res = self.entries.pop_front();
         debug!(self.log, "Removing {:?} from queue head!", res);
         self.start_next_tc();
     }
@@ -77,12 +91,10 @@ impl Queue {
 
     pub fn get_next_tc(&mut self) -> Vec<PreBuffer> {
         debug!(self.log, "Extracting current pre-transcode!");
-        if self.next.is_none() {
-            self.start_next_tc();
-        }
-        let ne = mem::replace(&mut self.next, None).unwrap();
-        self.dur = ne.0;
-        return ne.1;
+        // Swap next into np, then clear next and extract np buffers
+        mem::swap(&mut self.next, &mut self.np);
+        self.next = Default::default();
+        mem::replace(&mut self.np.bufs, Vec::new())
     }
 
     pub fn start_next_tc(&mut self) {
@@ -98,16 +110,28 @@ impl Queue {
                 // TODO: Make this less retarded - Rust can't deal with two levels of dereference
                 let ct = &self.cfg.queue.fallback.1.clone();
                 warn!(self.log, "Using fallback");
-                self.next = Some(self.initiate_transcode(buf, ct).unwrap());
+                let tc = self.initiate_transcode(buf, ct).unwrap();
+                self.next = QueueBuffer {
+                    dur: tc.0,
+                    bufs: tc.1,
+                    entry: QueueEntry { id: 0, path: "fallback".to_owned() },
+                };
                 return;
             }
             tries += 1;
-            if let Some(path) = self.next_buffer() {
-                match fs::File::open(path.clone()) {
+            if let Some(qe) = self.next_buffer() {
+                match fs::File::open(&qe.path) {
                     Ok(f) => {
-                        let ext = if let Some(e) = path.split('.').last() { e } else { continue };
+                        let ext = if let Some(e) = qe.path.split('.').last() { e } else { continue };
                         match self.initiate_transcode(f, ext) {
-                            Ok(bufs) => { self.next = Some(bufs); return; },
+                            Ok(tc) => {
+                                self.next = QueueBuffer {
+                                    dur: tc.0,
+                                    bufs: tc.1,
+                                    entry: qe.clone(),
+                                };
+                                return;
+                            },
                             Err(e) => {
                                 warn!(self.log, "Failed to start transcode: {}", e);
                                 continue;
@@ -115,7 +139,7 @@ impl Queue {
                         }
                     }
                     Err(e) => {
-                        warn!(self.log, "Failed to open file at path {}: {}", path, e);
+                        warn!(self.log, "Failed to open queue entry {:?}: {}", qe, e);
                         continue;
                     }
                 }
@@ -123,29 +147,24 @@ impl Queue {
         }
     }
 
-    fn next_buffer(&mut self) -> Option<String> {
+    fn next_buffer(&mut self) -> Option<QueueEntry> {
         self.next_queue_buffer().or_else(|| self.random_buffer())
     }
 
-    fn next_queue_buffer(&mut self) -> Option<String> {
-        while !self.entries.is_empty() {
-            let entry = &self.entries[0];
-            info!(self.log, "Using queue entry {:?}", entry.path);
-            return Some(entry.path.clone());
+    fn next_queue_buffer(&mut self) -> Option<QueueEntry> {
+        let e = self.entries.pop_front();
+        if let Some(ref er) = e {
+            info!(self.log, "Using queue entry {:?}", er);
         }
-        return None;
+        e
     }
 
-    fn random_buffer(&mut self) -> Option<String> {
+    fn random_buffer(&mut self) -> Option<QueueEntry> {
         let mut body = String::new();
         let res = reqwest::get(&self.cfg.queue.random.clone())
             .ok()
             .and_then(|mut r| r.read_to_string(&mut body).ok())
-            .and_then(|_| serde::from_str(&body).ok())
-            .map(|e: QueueEntry| {
-                debug!(self.log, "Attempting to use random buffer from path {:?}", e.path);
-                e.path.clone()
-            });
+            .and_then(|_| serde::from_str(&body).ok());
         if res.is_some() {
             info!(self.log, "Using random entry {:?}", res.as_ref().unwrap());
         }
@@ -181,5 +200,15 @@ impl Queue {
         });
         self.counter += 1;
         Ok((dur, prebufs))
+    }
+}
+
+impl QueueBuffer {
+    pub fn entry(&self) -> &QueueEntry {
+        &self.entry
+    }
+
+    pub fn duration(&self) -> &time::Duration {
+        &self.dur
     }
 }

@@ -58,12 +58,20 @@ struct Server {
 impl Server {
     fn handle_request(&self, req: &rouille::Request) -> rouille::Response {
         router!(req,
+                (GET) (/np) => {
+                    debug!(self.log, "Handling now playing req");
+                    let q = self.queue.lock().unwrap();
+                    rouille::Response::from_data(
+                        "application/json",
+                        serde::to_string(q.np().entry()).unwrap())
+                },
+
                 (GET) (/queue) => {
                     debug!(self.log, "Handling queue disp req");
                     let q = self.queue.lock().unwrap();
                     rouille::Response::from_data(
                         "application/json",
-                        serde::to_string(&q.entries).unwrap())
+                        serde::to_string(&q.entries()).unwrap())
                 },
 
                 (POST) (/queue/head) => {
