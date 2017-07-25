@@ -440,10 +440,7 @@ impl Input {
         unsafe {
             let s = sys::av_q2d((*self.stream).time_base);
             let dur = s * (*self.stream).duration as f64;
-            let sd = dur as u64;
-            let dur_i = time::Duration::from_secs(sd);
-            let dur_f = time::Duration::from_millis(((dur - sd as f64) * 100.) as u64);
-            dur_i + dur_f
+            time::Duration::from_millis((dur * 1000.) as u64)
         }
     }
 

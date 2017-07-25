@@ -9,7 +9,8 @@ use slog::Logger;
 use config::{Config, StreamConfig, Container};
 
 const CLIENT_BUFFER_LEN: usize = 4096;
-const BACK_BUFFER_LEN: usize = 131072;
+// Number of frames to buffer by
+const BACK_BUFFER_LEN: usize = 256;
 const CHUNK_SIZE: usize = 1024;
 static CHUNK_HEADER: &'static str = "400\r\n";
 static CHUNK_FOOTER: &'static str = "\r\n";
@@ -33,9 +34,15 @@ pub struct Broadcaster {
 
 #[derive(Clone, Debug)]
 pub struct Buffer {
-    header: Option<Vec<u8>>,
-    data: Vec<u8>,
-    mount: usize
+    mount: usize,
+    data: BufferData
+}
+
+#[derive(Clone, Debug)]
+pub enum BufferData {
+    Header(Vec<u8>),
+    Frame(Vec<u8>),
+    Trailer(Vec<u8>),
 }
 
 struct Client {
@@ -54,7 +61,7 @@ struct Incoming {
 struct Stream {
     config: StreamConfig,
     header: Vec<u8>,
-    buffer: VecDeque<u8>,
+    buffer: VecDeque<Vec<u8>>,
 }
 
 enum Chunker {
@@ -143,27 +150,28 @@ impl Broadcaster {
 
     fn process_buffer(&mut self) {
         while let Ok(buf) = self.data.try_recv() {
-            for id in self.client_mounts[buf.mount].clone() {
-                if {
-                    let client = self.clients.get_mut(&id).unwrap();
-                    // TODO: definitely resolve the header issue
-                    //
-                    //let r = if let Some(ref h) = buf.header {
-                    //    client.send_data(h)
-                    //} else { Ok(()) };
-                    //r.and_then(|_| client.send_data(&buf.data[..]))
-                    client.send_data(&buf.data)
-                }.is_err() {
-                    self.remove_client(&id);
+            match buf.data {
+                BufferData::Header(ref f) | BufferData::Frame(ref f) | BufferData::Trailer(ref f) => {
+                    for id in self.client_mounts[buf.mount].clone() {
+                        if {
+                            let client = self.clients.get_mut(&id).unwrap();
+                            client.send_data(&f)
+                        }.is_err() {
+                            self.remove_client(&id);
+                        }
+                    }
+                    let ref mut sb = self.streams[buf.mount].buffer;
+                    sb.push_back(f.clone());
+                    while sb.len() > BACK_BUFFER_LEN {
+                        sb.pop_front();
+                    }
                 }
             }
-            if let Some(h) = buf.header {
-                self.streams[buf.mount].header = h;
-            }
-            let ref mut sb = self.streams[buf.mount].buffer;
-            sb.extend(buf.data.iter());
-            while sb.len() > BACK_BUFFER_LEN {
-                sb.pop_front();
+            match buf.data {
+                BufferData::Header(h) => {
+                    self.streams[buf.mount].header = h;
+                }
+                _ => { }
             }
         }
     }
@@ -181,8 +189,12 @@ impl Broadcaster {
                         // Send header, and buffered data
                         if client.write_resp(&stream.config)
                             .and_then(|_| client.send_data(&stream.header))
-                            .and_then(|_| client.send_data(&stream.buffer.as_slices().0))
-                            .and_then(|_| client.send_data(&stream.buffer.as_slices().1))
+                            .and_then(|_| {
+                                for buf in stream.buffer.iter() {
+                                    client.send_data(buf)?
+                                }
+                                Ok(())
+                            })
                             .is_ok()
                         {
                             self.client_mounts[mid].insert(id);
@@ -223,12 +235,8 @@ impl Broadcaster {
 }
 
 impl Buffer {
-    pub fn new(mount: usize, data: Vec<u8>) -> Buffer {
-        Buffer { mount, data, header: None }
-    }
-
-    pub fn new_header(mount: usize, data: Vec<u8>, header: Vec<u8>) -> Buffer {
-        Buffer { mount, data, header: Some(header) }
+    pub fn new(mount: usize, data: BufferData) -> Buffer {
+        Buffer { mount, data }
     }
 }
 

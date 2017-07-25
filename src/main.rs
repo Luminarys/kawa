@@ -24,7 +24,7 @@ mod config;
 mod api;
 mod queue;
 mod util;
-mod ring_buffer;
+mod tc_queue;
 mod prebuffer;
 mod broadcast;
 

@@ -3,7 +3,6 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 use std::time::{Instant, Duration};
 use slog::Logger;
-use std::io::Read;
 
 use queue::Queue;
 use api::{ApiMessage, QueuePos};
@@ -41,27 +40,15 @@ pub fn play(buffer_rec: Receiver<PreBuffer>, mid: usize, btx: amy::Sender<Buffer
     debug!(log, "Awaiting initial buffer");
     let mut pb = buffer_rec.recv().unwrap();
     pb.buffer.start();
-    let mut sent_header = false;
     loop {
-        let mut buf = vec![0u8; 512];
-        match pb.buffer.read(&mut buf) {
-            Ok(0) => {
-                warn!(log, "Starved for data!");
-                thread::sleep(Duration::from_millis(10));
+        match pb.buffer.next_buf() {
+            Some(b) => {
+                btx.send(Buffer::new(mid, b)).unwrap();
             }
-            Ok(_) => {
-                if !sent_header {
-                    btx.send(Buffer::new_header(mid, buf, pb.buffer.get_header())).unwrap();
-                    sent_header = true;
-                } else {
-                    btx.send(Buffer::new(mid, buf)).unwrap();
-                }
-            }
-            Err(_) => {
+            None => {
                 debug!(log, "Buffer drained, waiting for next!");
                 pb = buffer_rec.recv().unwrap();
                 pb.buffer.start();
-                sent_header = false;
             }
         }
     }

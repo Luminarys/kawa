@@ -3,12 +3,11 @@ use std::io::{self, Read, BufReader};
 use config::{Config, Container};
 use reqwest;
 use prebuffer::PreBuffer;
-use ring_buffer;
 use slog::Logger;
 use serde_json as serde;
+use tc_queue;
 use kaeru;
 
-const RB_LEN: usize = 128000;
 // 256 KiB nuffer
 const INPUT_BUF_LEN: usize = 262144;
 
@@ -160,7 +159,7 @@ impl Queue {
         let metadata = sync::Arc::new(input.metadata());
         let mut gb = kaeru::GraphBuilder::new(input)?;
         for s in self.cfg.streams.iter() {
-            let (tx, rx) = ring_buffer::new(RB_LEN);
+            let (tx, rx) = tc_queue::new();
             let ct = match s.container {
                 Container::Ogg => "ogg",
                 Container::MP3 => "mp3",
