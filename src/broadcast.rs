@@ -4,6 +4,7 @@ use std::{time, thread, cmp};
 use std::io::{self, Read, Write};
 
 use {amy, httparse};
+use url::Url;
 use slog::Logger;
 
 use config::{Config, StreamConfig, Container};
@@ -54,6 +55,7 @@ struct Client {
     buffer: VecDeque<u8>,
     last_action: time::Instant,
     chunker: Chunker,
+    user: Option<String>,
 }
 
 struct Incoming {
@@ -209,14 +211,27 @@ impl Broadcaster {
 
     fn process_incoming(&mut self, id: usize) {
         match self.incoming.get_mut(&id).unwrap().process() {
-            Ok(Some(mount)) => {
+            Ok(Some(path)) => {
+                // Need this
+                let ub = Url::parse("http://localhost/").unwrap();
+                let url = if let Ok(u) = ub.join(&path) {
+                    u
+                } else {
+                    self.remove_incoming(&id);
+                    return;
+                };
+                let mount = url.path();
+                let user = url.query_pairs().into_owned()
+                    .find(|&(ref k, _)| k == "user")
+                    .map(|(_, v)|  v);
+
                 let inc = self.incoming.remove(&id).unwrap();
                 for (mid, stream) in self.streams.iter().enumerate() {
                     if mount.ends_with(&stream.config.mount) {
                         debug!(self.log, "Adding a client to stream {}", stream.config.mount);
                         // Swap to write only mode
                         self.reg.reregister(id, &inc.conn, amy::Event::Write).unwrap();
-                        let mut client = Client::new(inc.conn);
+                        let mut client = Client::new(inc.conn, user);
                         // Send header, and buffered data
                         if client.write_resp(&stream.config)
                             .and_then(|_| client.send_data(&stream.header))
@@ -317,12 +332,13 @@ impl Incoming {
 }
 
 impl Client {
-    fn new(conn: TcpStream) -> Client {
+    fn new(conn: TcpStream, user: Option<String>) -> Client {
         Client {
             conn,
             buffer: VecDeque::with_capacity(CLIENT_BUFFER_LEN),
             last_action: time::Instant::now(),
             chunker: Chunker::new(),
+            user,
         }
     }
 

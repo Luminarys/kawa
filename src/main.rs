@@ -16,6 +16,7 @@ extern crate serde_derive;
 extern crate rouille;
 extern crate amy;
 extern crate httparse;
+extern crate url;
 
 extern crate kaeru;
 
