@@ -11,6 +11,9 @@ use config::{Config, StreamConfig, Container};
 const CLIENT_BUFFER_LEN: usize = 4096;
 // Number of frames to buffer by
 const BACK_BUFFER_LEN: usize = 256;
+// Seconds of inactivity until client timeout
+const CLIENT_TIMEOUT: u64 = 10;
+
 const CHUNK_SIZE: usize = 1024;
 static CHUNK_HEADER: &'static str = "400\r\n";
 static CHUNK_FOOTER: &'static str = "\r\n";
@@ -29,6 +32,7 @@ pub struct Broadcaster {
     client_mounts: Vec<HashSet<usize>>,
     listener: TcpListener,
     lid: usize,
+    tid: usize,
     log: Logger,
 }
 
@@ -53,6 +57,7 @@ struct Client {
 }
 
 struct Incoming {
+    last_action: time::Instant,
     conn: TcpStream,
     buf: [u8; 1024],
     len: usize,
@@ -92,6 +97,7 @@ impl Broadcaster {
         let listener = TcpListener::bind((Ipv4Addr::new(0, 0, 0, 0), cfg.radio.port))?;
         listener.set_nonblocking(true)?;
         let lid = reg.register(&listener, amy::Event::Read)?;
+        let tid = reg.set_interval(5000)?;
         let (tx, rx) = reg.channel()?;
         let mut streams = Vec::new();
         for config in cfg.streams.iter().cloned() {
@@ -108,6 +114,7 @@ impl Broadcaster {
             client_mounts: vec![HashSet::new(); cfg.streams.len()],
             listener,
             lid,
+            tid,
             log,
         }, tx))
     }
@@ -118,6 +125,8 @@ impl Broadcaster {
             for n in self.poll.wait(15).unwrap() {
                 if n.id == self.lid {
                     self.accept_client();
+                } else if n.id == self.tid{
+                    self.reap();
                 } else if n.id == self.data.get_id() {
                     self.process_buffer();
                 } else if self.incoming.contains_key(&n.id) {
@@ -128,6 +137,28 @@ impl Broadcaster {
                     warn!(self.log, "Received amy event for bad id: {}", n.id);
                 }
             }
+        }
+    }
+
+    fn reap(&mut self) {
+        let mut ids = Vec::new();
+        for (id, inc) in self.incoming.iter() {
+            if inc.last_action.elapsed() > time::Duration::from_secs(CLIENT_TIMEOUT) {
+                ids.push(*id);
+            }
+        }
+        for id in ids.iter() {
+            self.remove_incoming(id);
+        }
+        ids.clear();
+
+        for (id, client) in self.clients.iter() {
+            if client.last_action.elapsed() > time::Duration::from_secs(CLIENT_TIMEOUT) {
+                ids.push(*id);
+            }
+        }
+        for id in ids.iter() {
+            self.remove_client(id);
         }
     }
 
@@ -245,6 +276,7 @@ impl Incoming {
     fn new(conn: TcpStream) -> Incoming {
         conn.set_nonblocking(true).unwrap();
         Incoming {
+            last_action: time::Instant::now(),
             conn,
             buf: [0; 1024],
             len: 0,
@@ -252,6 +284,7 @@ impl Incoming {
     }
 
     fn process(&mut self) -> Result<Option<String>, ()> {
+        self.last_action = time::Instant::now();
         if self.read().is_ok() {
             let mut headers = [httparse::EMPTY_HEADER; 16];
             let mut req = httparse::Request::new(&mut headers);
@@ -320,7 +353,6 @@ impl Client {
             return Ok(());
         }
 
-        self.last_action = time::Instant::now();
         // Attempt to flush buffer first
         match self.flush_buffer() {
             Ok(true) => { },
@@ -365,6 +397,8 @@ impl Client {
     }
 
     fn flush_buffer(&mut self) -> Result<bool, ()> {
+        self.last_action = time::Instant::now();
+
         if self.buffer.is_empty() {
             return Ok(true);
         }
