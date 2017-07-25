@@ -94,7 +94,9 @@ pub fn start_streams(cfg: Config,
             // even if it means some songs get cut off early
             if prebuffers.iter().any(|pb| pb.buffer.done()) {
                 let now = Instant::now();
-                if end_time > now {
+                // Protection in case duration gives a non sane value
+                if end_time > now && end_time - now < Duration::from_secs(10) {
+                    debug!(log, "Sleeping for {:?} to make up for difference in duration", end_time - now);
                     thread::sleep(end_time - now);
                 }
                 break;
