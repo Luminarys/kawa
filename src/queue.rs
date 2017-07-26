@@ -94,9 +94,11 @@ impl Queue {
         // Swap next into np, then clear next and extract np buffers
         mem::swap(&mut self.next, &mut self.np);
         self.next = Default::default();
-        // Pop queue head if its the same as np
+        // Pop queue head if its the same as np, and start next transcode
         if self.entries.front().map(|e| *e == self.np.entry).unwrap_or(false) {
             self.pop_head();
+        } else {
+            self.start_next_tc();
         }
         mem::replace(&mut self.np.bufs, Vec::new())
     }
