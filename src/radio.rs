@@ -80,8 +80,6 @@ pub fn start_streams(cfg: Config,
         }
         let end_time = Instant::now() + *queue.lock().unwrap().np().duration();
 
-        debug!(log, "Removing queue head");
-        queue.lock().unwrap().pop_head();
         debug!(log, "Entering main loop");
 
         // Song activity loop - ensures that the song is properly transcoding and handles any sort

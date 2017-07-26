@@ -21,7 +21,7 @@ pub struct Queue {
     log: Logger,
 }
 
-#[derive(Clone, Debug, Deserialize, Default, Serialize)]
+#[derive(Clone, Debug, Deserialize, Default, Serialize, PartialEq)]
 pub struct QueueEntry {
     pub id: i64,
     pub path: String,
@@ -94,6 +94,10 @@ impl Queue {
         // Swap next into np, then clear next and extract np buffers
         mem::swap(&mut self.next, &mut self.np);
         self.next = Default::default();
+        // Pop queue head if its the same as np
+        if self.entries.front().map(|e| *e == self.np.entry).unwrap_or(false) {
+            self.entries.pop_front();
+        }
         mem::replace(&mut self.np.bufs, Vec::new())
     }
 
@@ -152,7 +156,7 @@ impl Queue {
     }
 
     fn next_queue_buffer(&mut self) -> Option<QueueEntry> {
-        let e = self.entries.pop_front();
+        let e = self.entries.front().cloned();
         if let Some(ref er) = e {
             info!(self.log, "Using queue entry {:?}", er);
         }
