@@ -494,6 +494,16 @@ impl Drop for Input {
 }
 
 impl Output {
+    pub fn new_writer<T: Write + Send + Sized>(t: T, container: &str, codec_id: sys::AVCodecID, bit_rate: Option<i64>) -> Result<Output> {
+        struct SW<T: Write>(T);
+        impl<T: Write> Write for SW<T> {
+            fn write(&mut self, buf: &[u8]) -> io::Result<usize> { self.0.write(buf) }
+            fn flush(&mut self) -> io::Result<()> { self.0.flush() }
+        }
+        impl<T: Write> Sink for SW<T> { };
+        Output::new(SW(t), container, codec_id, bit_rate)
+    }
+
     pub fn new<T: Sink + Send + Sized>(t: T, container: &str, codec_id: sys::AVCodecID, bit_rate: Option<i64>) -> Result<Output> {
         unsafe {
             let buffer = sys::av_malloc(4096) as *mut u8;
@@ -771,7 +781,7 @@ mod tests {
     fn test_instantiate_output() {
         init();
         let d = vec![0u8; 1024 * 16];
-        Output::new(d, "ogg", super::sys::AVCodecID::AV_CODEC_ID_VORBIS, None).unwrap();
+        Output::new_writer(d, "ogg", super::sys::AVCodecID::AV_CODEC_ID_VORBIS, None).unwrap();
     }
 
     #[test]
@@ -788,10 +798,10 @@ mod tests {
         let fout4 = File::create("test/test4.mp3").unwrap();
 
         let i = Input::new(fin, "mp3")?;
-        let o1 = Output::new(fout1, "ogg", super::AVCodecID::AV_CODEC_ID_OPUS, None)?;
-        let o2 = Output::new(fout2, "ogg", super::AVCodecID::AV_CODEC_ID_VORBIS, None)?;
-        let o3 = Output::new(fout3, "ogg", super::AVCodecID::AV_CODEC_ID_FLAC, None)?;
-        let o4 = Output::new(fout4, "mp3", super::AVCodecID::AV_CODEC_ID_MP3, None)?;
+        let o1 = Output::new_writer(fout1, "ogg", super::AVCodecID::AV_CODEC_ID_OPUS, None)?;
+        let o2 = Output::new_writer(fout2, "ogg", super::AVCodecID::AV_CODEC_ID_VORBIS, None)?;
+        let o3 = Output::new_writer(fout3, "ogg", super::AVCodecID::AV_CODEC_ID_FLAC, None)?;
+        let o4 = Output::new_writer(fout4, "mp3", super::AVCodecID::AV_CODEC_ID_MP3, None)?;
         let mut gb = GraphBuilder::new(i)?;
         gb.add_output(o1)?;
         gb.add_output(o2)?;

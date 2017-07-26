@@ -1,4 +1,6 @@
 #![cfg_attr(nightly, feature(alloc_system))]
+#[cfg(nightly)]
+extern crate alloc_system;
 
 #[macro_use]
 extern crate slog;

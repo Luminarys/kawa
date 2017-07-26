@@ -5,6 +5,9 @@ authors = ["Luminarys <postmaster@gensok.io>"]
 links = "avutil"
 build = "build.rs"
 
+[features]
+default = []
+
 [dependencies.libc]
 version = "0.2"
 

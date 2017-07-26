@@ -3,6 +3,10 @@ name = "kawa"
 version = "0.1.0"
 authors = ["Luminarys <postmaster@gensok.io>", "ParadoxSpiral <ParadoxSpiral@riseup.net>"]
 
+[features]
+default = []
+nightly = []
+
 [dependencies]
 kaeru = { path = "kaeru" }
 toml = "0.4"
