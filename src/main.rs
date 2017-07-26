@@ -1,5 +1,5 @@
-#![cfg_attr(nightly, feature(alloc_system))]
-#[cfg(nightly)]
+#![cfg_attr(feature = "nightly", feature(alloc_system))]
+#[cfg(feature = "nightly")]
 extern crate alloc_system;
 
 #[macro_use]
@@ -47,7 +47,12 @@ lazy_static! {
 }
 
 fn main() {
+
     let root_log = LOG.clone();
+
+    #[cfg(feature = "nightly")]
+    info!(root_log, "Using system alloc");
+
     info!(root_log, "Initializing ffmpeg");
     kaeru::init();
 
@@ -92,8 +97,10 @@ mod tests {
 
     #[test]
     fn test_tc() {
+        #[cfg(feature = "nightly")]
+        info!(LOG, "Using system alloc");
         kaeru::init();
-        loop {
+        for _ in 0..5 {
             tc();
         }
     }
@@ -116,9 +123,9 @@ mod tests {
     fn tc() -> kaeru::Result<()> {
         let fin = File::open("/tmp/in.flac").unwrap();
         let i = Input::new(fin, "flac")?;
-        let o1 = Output::new(Dum(0), "mp3", kaeru::AVCodecID::AV_CODEC_ID_MP3, Some(192))?;
-        let o2 = Output::new(Dum(0), "ogg", kaeru::AVCodecID::AV_CODEC_ID_OPUS, Some(192))?;
-        let o3 = Output::new(Dum(0), "ogg", kaeru::AVCodecID::AV_CODEC_ID_FLAC, None)?;
+        let o1 = Output::new_writer(Dum(0), "mp3", kaeru::AVCodecID::AV_CODEC_ID_MP3, Some(192))?;
+        let o2 = Output::new_writer(Dum(0), "ogg", kaeru::AVCodecID::AV_CODEC_ID_OPUS, Some(192))?;
+        let o3 = Output::new_writer(Dum(0), "ogg", kaeru::AVCodecID::AV_CODEC_ID_FLAC, None)?;
         let mut gb = GraphBuilder::new(i)?;
         gb.add_output(o1)?.add_output(o2)?.add_output(o3)?;
         let g = gb.build()?;

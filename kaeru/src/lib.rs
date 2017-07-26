@@ -196,7 +196,7 @@ impl Graph {
     }
 
     unsafe fn flush(&self) {
-        sys::av_buffersrc_add_frame_flags(self.input.ctx, ptr::null_mut(), sys::AV_BUFFERSRC_FLAG_KEEP_REF as i32);
+        sys::av_buffersrc_add_frame_flags(self.input.ctx, ptr::null_mut(), 0);
         for output in self.outputs.iter() {
             loop {
                 match sys::av_buffersink_get_frame(output.ctx, self.out_frame) {
@@ -487,7 +487,7 @@ impl Drop for Input {
         unsafe {
             sys::av_free((*(*self.ctx).pb).buffer as *mut c_void);
             sys::av_free((*self.ctx).pb as *mut c_void);
-            sys::avformat_free_context(self.ctx);
+            sys::avformat_close_input(&mut self.ctx);
             sys::avcodec_free_context(&mut self.codec_ctx);
         }
     }
@@ -591,7 +591,6 @@ impl Output {
                 _ => break
             }
         }
-        sys::av_packet_unref(&mut out_pkt);
     }
 }
 
