@@ -50,6 +50,9 @@ impl io::Write for QW {
                 if q.started {
                     break;
                 }
+                if q.done {
+                    return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "Canceled!"));
+                }
                 drop(q);
                 thread::sleep(time::Duration::from_millis(15));
             }
