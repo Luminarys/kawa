@@ -100,9 +100,8 @@ mod tests {
         #[cfg(feature = "nightly")]
         info!(LOG, "Using system alloc");
         kaeru::init();
-        for _ in 0..5 {
-            tc();
-        }
+        tc();
+        thread::sleep_ms(30000);
     }
 
     struct Dum(usize);
@@ -110,6 +109,7 @@ mod tests {
     impl io::Write for Dum {
         fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
             self.0 += buf.len();
+            return Ok(buf.len());
             if self.0 < 4096 * 32 {
                 Ok(buf.len())
             } else {
@@ -121,8 +121,9 @@ mod tests {
     }
 
     fn tc() -> kaeru::Result<()> {
-        let fin = File::open("/tmp/in.flac").unwrap();
-        let i = Input::new(fin, "flac")?;
+        let fin = File::open("/tmp/in.mp3").unwrap();
+        let i = Input::new(fin, "mp3")?;
+
         let o1 = Output::new_writer(Dum(0), "mp3", kaeru::AVCodecID::AV_CODEC_ID_MP3, Some(192))?;
         let o2 = Output::new_writer(Dum(0), "ogg", kaeru::AVCodecID::AV_CODEC_ID_OPUS, Some(192))?;
         let o3 = Output::new_writer(Dum(0), "ogg", kaeru::AVCodecID::AV_CODEC_ID_FLAC, None)?;

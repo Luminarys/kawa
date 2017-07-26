@@ -93,12 +93,6 @@ pub struct Metadata {
     pub track: Option<String>,
 }
 
-struct Frames<'a> {
-    i: &'a Input,
-    frame: *mut sys::AVFrame,
-    packet: sys::AVPacket,
-}
-
 struct Opaque {
     ptr: *mut c_void,
     cleanup: fn(*mut c_void),
@@ -142,9 +136,7 @@ impl Graph {
         // TODO Create callback to check for readiness in Sink
         let mut cpts = 0;
         let mut last_pts = time::Instant::now();
-        for res in self.input.input.read_frames(self.in_frame) {
-            res?;
-
+        self.input.input.read_frames(self.in_frame, || {
             let s = sys::av_q2d((*self.input.input.stream).time_base);
             let pts = s * (*self.in_frame).pkt_pts as f64;
             if (pts as u32) > cpts {
@@ -159,13 +151,16 @@ impl Graph {
 
             let pres = self.process_frame(self.in_frame);
             sys::av_frame_unref(self.in_frame);
-            pres?;
-        }
+            pres
+        })?;
 
         // Flush everything
         self.process_frame(ptr::null_mut())?;
         for o in self.outputs.iter_mut() {
-            o.output.write_frame(ptr::null_mut())?;
+            // If the codec needs flushing, do so
+            if ((*(*o.output.codec_ctx).codec).capabilities as u32 & sys::AV_CODEC_CAP_DELAY) != 0 {
+                o.output.write_frame(ptr::null_mut())?;
+            }
         }
         Ok(())
     }
@@ -471,14 +466,45 @@ impl Input {
         }
     }
 
-    unsafe fn read_frames(&self, frame: *mut sys::AVFrame) -> Frames {
+    unsafe fn read_frames<F: FnMut() -> Result<()>>(&self, frame: *mut sys::AVFrame, mut f: F) -> Result<()> {
         let mut packet: sys::AVPacket = mem::uninitialized();
         packet.data = ptr::null_mut();
-        Frames {
-            frame,
-            packet,
-            i: self
+        packet.size = 0;
+
+        'outer: loop {
+            loop {
+                match sys::av_read_frame(self.ctx, &mut packet) {
+                    0 => { }
+                    e if e == sys::AVERROR_EOF => { break 'outer; }
+                    e  => { return Err(ErrorKind::FFmpeg("failed to read frame", e).into()); }
+                }
+                let stream_idx = (&packet).stream_index as isize;
+                let stream = *(*self.ctx).streams.offset(stream_idx);
+                if stream == self.stream {
+                    break;
+                } else {
+                    sys::av_packet_unref(&mut packet);
+                }
+            }
+
+            match { let r = sys::avcodec_send_packet(self.codec_ctx, &packet); sys::av_packet_unref(&mut packet); r} {
+                0 => { }
+                e if e == sys::AVERROR_EOF => { break 'outer; }
+                e  => { return Err(ErrorKind::FFmpeg("failed to decode packet", e).into()); }
+            }
+
+            loop {
+                // Try to get a frame, if not try to read packets and decode them
+                match sys::avcodec_receive_frame(self.codec_ctx, frame) {
+                    0 => { f()?; },
+                    e if e == sys::AVERROR(libc::EAGAIN) => { break; }
+                    e if e == sys::AVERROR_EOF => { break 'outer; }
+                    e => { return Err(ErrorKind::FFmpeg("failed to receive frame", e).into()); }
+                }
+            }
         }
+
+        Ok(())
     }
 }
 
@@ -602,57 +628,6 @@ impl Drop for Output {
             sys::av_free((*self.ctx).pb as *mut c_void);
             sys::avformat_free_context(self.ctx);
             sys::avcodec_free_context(&mut self.codec_ctx);
-        }
-    }
-}
-
-impl<'a> Iterator for Frames<'a> {
-    type Item = Result<()>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        unsafe {
-            // Try to get a frame, if not try to read packets and decode them
-            match sys::avcodec_receive_frame(self.i.codec_ctx, self.frame) {
-                0 => { return Some(Ok(())); },
-                e if e == sys::AVERROR(libc::EAGAIN) => { }
-                e if e == sys::AVERROR_EOF => { return None; }
-                e  => { return Some(Err(ErrorKind::FFmpeg("failed to receive frame", e).into())); }
-            }
-
-            loop {
-                match sys::av_read_frame(self.i.ctx, &mut self.packet) {
-                    0 => { }
-                    e if e == sys::AVERROR_EOF => { return None; }
-                    e  => { return Some(Err(ErrorKind::FFmpeg("failed to read frame", e).into())); }
-                }
-                let stream_idx = (&self.packet).stream_index as isize;
-                let stream = *(*self.i.ctx).streams.offset(stream_idx);
-                if stream == self.i.stream {
-                    break;
-                }
-            }
-
-            match { let r = sys::avcodec_send_packet(self.i.codec_ctx, &self.packet); sys::av_packet_unref(&mut self.packet); r} {
-                0 => { }
-                e if e == sys::AVERROR_EOF => { return None; }
-                e  => { return Some(Err(ErrorKind::FFmpeg("failed to decode packet", e).into())); }
-            }
-            self.next()
-        }
-    }
-}
-
-impl<'a> Drop for Frames<'a> {
-    fn drop(&mut self) {
-        // Flush any remaining packets in the codec queue
-        unsafe {
-            sys::avcodec_send_packet(self.i.codec_ctx, ptr::null());
-            loop {
-                match sys::avcodec_receive_frame(self.i.codec_ctx, self.frame) {
-                    0 => { sys::av_frame_unref(self.frame) },
-                    _ => break,
-                }
-            }
         }
     }
 }
