@@ -96,7 +96,7 @@ impl Queue {
         self.next = Default::default();
         // Pop queue head if its the same as np
         if self.entries.front().map(|e| *e == self.np.entry).unwrap_or(false) {
-            self.entries.pop_front();
+            self.pop_head();
         }
         mem::replace(&mut self.np.bufs, Vec::new())
     }
