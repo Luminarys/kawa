@@ -19,7 +19,6 @@ extern crate rouille;
 extern crate amy;
 extern crate httparse;
 extern crate url;
-extern crate curl;
 
 extern crate kaeru;
 
