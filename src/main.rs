@@ -40,7 +40,7 @@ lazy_static! {
     pub static ref LOG: slog::Logger = {
         use slog::Drain;
 
-        let decorator = slog_term::TermDecorator::new().build();
+        let decorator = slog_term::TermDecorator::new().stderr().build();
         let drain = slog_term::FullFormat::new(decorator).build().fuse();
         let drain = slog_async::Async::new(drain).build().fuse();
         slog::Logger::root(drain, o!())
