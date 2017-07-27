@@ -34,6 +34,7 @@ mod broadcast;
 use std::env;
 use std::sync::{Arc, Mutex, mpsc};
 use std::io::{Read};
+use std::collections::HashMap;
 
 lazy_static! {
     pub static ref LOG: slog::Logger = {
@@ -82,9 +83,10 @@ fn main() {
     let radio_log = root_log.new(o!("Radio, streams" => config.streams.len()));
 
     let queue = Arc::new(Mutex::new(queue::Queue::new(config.clone(), queue_log)));
+    let listeners = Arc::new(Mutex::new(HashMap::new()));
     let (tx, rx) = mpsc::channel();
-    let btx = broadcast::start(&config, root_log.new(o!("thread" => "broadcast")));
-    api::start_api(config.api.clone(), queue.clone(), tx, api_log);
+    let btx = broadcast::start(&config, listeners.clone(), root_log.new(o!("thread" => "broadcast")));
+    api::start_api(config.api.clone(), queue.clone(), listeners, tx, api_log);
     radio::start_streams(config.clone(), queue, rx, btx, radio_log);
 }
 

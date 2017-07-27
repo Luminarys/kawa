@@ -7,6 +7,7 @@ use {amy, httparse};
 use url::Url;
 use slog::Logger;
 
+use api;
 use config::{Config, StreamConfig, Container};
 
 const CLIENT_BUFFER_LEN: usize = 4096;
@@ -32,6 +33,7 @@ pub struct Broadcaster {
     /// vec where idx: mount id , val: set of clients attached to mount id
     client_mounts: Vec<HashSet<usize>>,
     listener: TcpListener,
+    listeners: api::Listeners,
     lid: usize,
     tid: usize,
     log: Logger,
@@ -55,7 +57,6 @@ struct Client {
     buffer: VecDeque<u8>,
     last_action: time::Instant,
     chunker: Chunker,
-    user: Option<String>,
 }
 
 struct Incoming {
@@ -85,15 +86,14 @@ enum WR {
     Err,
 }
 
-pub fn start(cfg: &Config, log: Logger) -> amy::Sender<Buffer> {
-    let (mut b, tx) = Broadcaster::new(cfg, log).unwrap();
+pub fn start(cfg: &Config, listeners: api::Listeners, log: Logger) -> amy::Sender<Buffer> {
+    let (mut b, tx) = Broadcaster::new(cfg, listeners, log).unwrap();
     thread::spawn(move || b.run());
     tx
 }
 
-// TODO: Handle timeout
 impl Broadcaster {
-    pub fn new(cfg: &Config, log: Logger) -> io::Result<(Broadcaster, amy::Sender<Buffer>)> {
+    pub fn new(cfg: &Config, listeners: api::Listeners, log: Logger) -> io::Result<(Broadcaster, amy::Sender<Buffer>)> {
         let poll = amy::Poller::new()?;
         let mut reg = poll.get_registrar()?;
         let listener = TcpListener::bind((Ipv4Addr::new(0, 0, 0, 0), cfg.radio.port))?;
@@ -115,6 +115,7 @@ impl Broadcaster {
             streams,
             client_mounts: vec![HashSet::new(); cfg.streams.len()],
             listener,
+            listeners,
             lid,
             tid,
             log,
@@ -211,7 +212,7 @@ impl Broadcaster {
 
     fn process_incoming(&mut self, id: usize) {
         match self.incoming.get_mut(&id).unwrap().process() {
-            Ok(Some(path)) => {
+            Ok(Some((path, headers))) => {
                 // Need this
                 let ub = Url::parse("http://localhost/").unwrap();
                 let url = if let Ok(u) = ub.join(&path) {
@@ -221,9 +222,6 @@ impl Broadcaster {
                     return;
                 };
                 let mount = url.path();
-                let user = url.query_pairs().into_owned()
-                    .find(|&(ref k, _)| k == "user")
-                    .map(|(_, v)|  v);
 
                 let inc = self.incoming.remove(&id).unwrap();
                 for (mid, stream) in self.streams.iter().enumerate() {
@@ -231,7 +229,7 @@ impl Broadcaster {
                         debug!(self.log, "Adding a client to stream {}", stream.config.mount);
                         // Swap to write only mode
                         self.reg.reregister(id, &inc.conn, amy::Event::Write).unwrap();
-                        let mut client = Client::new(inc.conn, user);
+                        let mut client = Client::new(inc.conn);
                         // Send header, and buffered data
                         if client.write_resp(&stream.config)
                             .and_then(|_| client.send_data(&stream.header))
@@ -246,6 +244,11 @@ impl Broadcaster {
                         {
                             self.client_mounts[mid].insert(id);
                             self.clients.insert(id, client);
+                            self.listeners.lock().unwrap().insert(id, api::Listener {
+                                mount: stream.config.mount.clone(),
+                                path: path.clone(),
+                                headers,
+                            });
                         } else {
                             debug!(self.log, "Failed to write data to client");
                         }
@@ -269,6 +272,7 @@ impl Broadcaster {
     fn remove_client(&mut self, id: &usize) {
         let client = self.clients.remove(id).unwrap();
         self.reg.deregister(&client.conn).unwrap();
+        self.listeners.lock().unwrap().remove(id);
         // Remove from client_mounts map too
         for m in self.client_mounts.iter_mut() {
             m.remove(id);
@@ -298,7 +302,7 @@ impl Incoming {
         }
     }
 
-    fn process(&mut self) -> Result<Option<String>, ()> {
+    fn process(&mut self) -> Result<Option<(String, Vec<api::Header>)>, ()> {
         self.last_action = time::Instant::now();
         if self.read().is_ok() {
             let mut headers = [httparse::EMPTY_HEADER; 16];
@@ -306,7 +310,14 @@ impl Incoming {
             match req.parse(&self.buf[..self.len]) {
                 Ok(httparse::Status::Complete(_)) => {
                     if let Some(p) = req.path {
-                        Ok(Some(p.to_owned()))
+                        let ah: Vec<api::Header> = req.headers.into_iter()
+                            .filter(|h| *h != &httparse::EMPTY_HEADER)
+                            .map(|h| api::Header {
+                                name: h.name.to_owned(),
+                                value: String::from_utf8(h.value.to_vec()).unwrap_or("".to_owned())
+                            })
+                            .collect();
+                        Ok(Some((p.to_owned(), ah)))
                     } else {
                         Err(())
                     }
@@ -332,13 +343,12 @@ impl Incoming {
 }
 
 impl Client {
-    fn new(conn: TcpStream, user: Option<String>) -> Client {
+    fn new(conn: TcpStream) -> Client {
         Client {
             conn,
             buffer: VecDeque::with_capacity(CLIENT_BUFFER_LEN),
             last_action: time::Instant::now(),
             chunker: Chunker::new(),
-            user,
         }
     }
 

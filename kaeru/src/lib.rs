@@ -373,7 +373,6 @@ impl Input {
     pub fn new<T: Read + Send + Sized>(t: T, container: &str) -> Result<Input> {
         unsafe {
             // Cache page size used here
-            // TODO: check to see if we ned to av_free the buffer
             let buffer = sys::av_malloc(FFMPEG_BUFFER_SIZE) as *mut u8;
             ck_null!(buffer);
             let opaque = Opaque::new(t);
@@ -597,7 +596,6 @@ impl Output {
                 0 => { }
                 e => return Err(ErrorKind::FFmpeg("failed to write packet", e).into()),
             }
-            // TODO: This is not very robust, need to evaluate write_frame functionality
             sys::avio_flush((*self.ctx).pb);
             (self.packet_signal)(self._opaque.ptr);
             sys::av_packet_unref(&mut out_pkt);

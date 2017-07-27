@@ -1,5 +1,6 @@
 use std::sync::{Arc, Mutex};
 use std::sync::mpsc::Sender;
+use std::collections::HashMap;
 use std::thread;
 use std::path::Path;
 use serde_json as serde;
@@ -8,6 +9,17 @@ use rouille;
 
 use queue::{Queue, QueueEntry};
 use config::ApiConfig;
+
+pub type Listeners = Arc<Mutex<HashMap<usize, Listener>>>;
+type SQueue = Arc<Mutex<Queue>>;
+type ApiChan = Arc<Mutex<Sender<ApiMessage>>>;
+
+struct Server {
+    queue: SQueue,
+    listeners: Listeners,
+    chan: ApiChan,
+    log: Logger,
+}
 
 #[derive(Debug)]
 pub enum QueuePos {
@@ -23,36 +35,24 @@ pub enum ApiMessage {
     Clear,
 }
 
-type SQueue = Arc<Mutex<Queue>>;
-type ApiChan = Arc<Mutex<Sender<ApiMessage>>>;
-
 #[derive(Serialize)]
 pub struct Resp {
     pub success: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
 }
 
-impl Resp {
-    fn success() -> Resp {
-        Resp {
-            success: true,
-            reason: None,
-        }
-    }
-
-    fn failure(reason: &str) -> Resp {
-        Resp {
-            success: false,
-            reason: Some(String::from(reason)),
-        }
-
-    }
+#[derive(Serialize)]
+pub struct Listener {
+    pub mount: String,
+    pub path: String,
+    pub headers: Vec<Header>,
 }
 
-struct Server {
-    queue: SQueue,
-    chan: ApiChan,
-    log: Logger,
+#[derive(Serialize)]
+pub struct Header {
+    pub name: String,
+    pub value: String,
 }
 
 impl Server {
@@ -64,6 +64,14 @@ impl Server {
                     rouille::Response::from_data(
                         "application/json",
                         serde::to_string(q.np().entry()).unwrap())
+                },
+
+                (GET) (/listeners) => {
+                    debug!(self.log, "Handling listeners req");
+                    let l = self.listeners.lock().unwrap();
+                    rouille::Response::from_data(
+                        "application/json",
+                        serde::to_string::<Vec<&Listener>>(&l.iter().map(|(_, v)| v).collect()).unwrap())
                 },
 
                 (GET) (/queue) => {
@@ -142,7 +150,7 @@ impl Server {
                         serde::to_string(&Resp::success()).unwrap())
                 },
 
-                (POST) (/queue/skip) => {
+                (POST) (/skip) => {
                     debug!(self.log, "Handling queue skip");
                     self.chan.lock().unwrap().send(ApiMessage::Skip).unwrap();
                     rouille::Response::from_data(
@@ -163,13 +171,32 @@ impl Server {
     }
 }
 
-pub fn start_api(config: ApiConfig, queue: Arc<Mutex<Queue>>, updates: Sender<ApiMessage>, log: Logger) {
+impl Resp {
+    fn success() -> Resp {
+        Resp {
+            success: true,
+            reason: None,
+        }
+    }
+
+    fn failure(reason: &str) -> Resp {
+        Resp {
+            success: false,
+            reason: Some(String::from(reason)),
+        }
+
+    }
+}
+
+
+pub fn start_api(config: ApiConfig, queue: Arc<Mutex<Queue>>, listeners: Listeners, updates: Sender<ApiMessage>, log: Logger) {
     thread::spawn(move || {
         info!(log, "Starting API");
         let chan = Arc::new(Mutex::new(updates));
         let serv = Server {
             queue: queue,
             chan: chan,
+            listeners,
             log: log,
         };
         rouille::start_server(("127.0.0.1", config.port), move |request| {
