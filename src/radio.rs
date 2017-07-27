@@ -2,9 +2,13 @@ use std::sync::{Arc, Mutex};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 use std::time::{Instant, Duration};
-use slog::Logger;
+use std::io::Read;
 
-use queue::Queue;
+use serde_json;
+use slog::Logger;
+use curl::{self, easy};
+
+use queue::{Queue, QueueEntry};
 use api::{ApiMessage, QueuePos};
 use config::Config;
 use prebuffer::PreBuffer;
@@ -80,6 +84,12 @@ pub fn start_streams(cfg: Config,
         }
         let end_time = Instant::now() + *queue.lock().unwrap().np().duration();
 
+        debug!(log, "Broadcasting np");
+        let np = queue.lock().unwrap().np().entry().clone();
+        if let Err(e) = broadcast_np(&cfg.queue.np, np) {
+            warn!(log, "Failed to broadcast np: {}", e);
+        }
+
         debug!(log, "Entering main loop");
 
         // Song activity loop - ensures that the song is properly transcoding and handles any sort
@@ -126,4 +136,20 @@ pub fn start_streams(cfg: Config,
             }
         }
     }
+}
+
+fn broadcast_np(url: &str, song: QueueEntry) -> Result<(), curl::Error> {
+    let mut easy = easy::Easy::new();
+    // TODO: handle this
+    let s = if let Ok(s) = serde_json::to_string(&song) { s } else { return Ok(()) };
+    let mut data = (&s).as_bytes();
+    easy.url(url)?;
+    easy.post(true)?;
+    let mut list = easy::List::new();
+    list.append("Content-Type: application/json")?;
+    easy.http_headers(list)?;
+    easy.post_field_size(data.len() as u64)?;
+    let mut transfer = easy.transfer();
+    transfer.read_function(|buf| Ok(data.read(buf).unwrap_or(0)))?;
+    transfer.perform()
 }

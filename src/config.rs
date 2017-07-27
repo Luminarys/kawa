@@ -36,6 +36,7 @@ pub struct ApiConfig {
 #[derive(Clone)]
 pub struct QueueConfig {
     pub random: String,
+    pub np: String,
     pub fallback: (Arc<Vec<u8>>, String),
 }
 
@@ -69,6 +70,7 @@ struct InternalStreamConfig {
 struct InternalQueueConfig {
     #[serde(rename = "random_song_api")]
     pub random: String,
+    pub np: String,
     pub fallback: String,
 }
 
@@ -119,6 +121,7 @@ impl InternalConfig {
                streams: streams,
                queue: QueueConfig {
                     random: self.queue.random,
+                    np: self.queue.np,
                     fallback: (Arc::new(buffer), fbp.to_owned()),
                },
            })
