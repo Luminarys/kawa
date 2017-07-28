@@ -44,6 +44,7 @@ pub struct QueueConfig {
 pub enum Container {
     Ogg,
     MP3,
+    FLAC,
 }
 
 // Some unfortunate code duplication because you can't derive Deserialize for newtypes in this case
@@ -82,6 +83,7 @@ impl InternalConfig {
             let container = match &*s.container {
                 "ogg" => Container::Ogg,
                 "mp3" => Container::MP3,
+                "flac" => Container::FLAC,
                 _ => return Err(format!("Currently, only ogg and mp3 are supported as containers.")),
             };
             let codec = if let Some(c) = s.codec {
@@ -98,6 +100,7 @@ impl InternalConfig {
                 match container {
                     Container::Ogg => AVCodecID::AV_CODEC_ID_OPUS,
                     Container::MP3 => AVCodecID::AV_CODEC_ID_MP3,
+                    Container::FLAC => AVCodecID::AV_CODEC_ID_FLAC,
                 }
             };
 

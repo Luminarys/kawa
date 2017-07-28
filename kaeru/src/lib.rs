@@ -134,6 +134,7 @@ impl Graph {
 
     unsafe fn execute_tc(&mut self) -> Result<()> {
         self.input.input.read_frames(self.in_frame, || {
+            (*self.in_frame).pkt_pts = sys::av_frame_get_best_effort_timestamp(self.in_frame);
             let pres = self.process_frame(self.in_frame);
             sys::av_frame_unref(self.in_frame);
             pres

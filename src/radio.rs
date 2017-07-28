@@ -30,7 +30,7 @@ impl Syncer {
     fn new() -> Syncer {
         Syncer {
             last_pts: 0.,
-            init_pts: None,
+            init_pts: Some(0.),
             start: time::Instant::now(),
         }
     }
@@ -49,7 +49,7 @@ impl Syncer {
     }
 
     fn done(&mut self, log: &Logger) {
-        if let Some(dur) = time::Duration::from_millis(((self.last_pts - self.init_pts.unwrap()) * 1000.) as u64)
+        if let Some(dur) = time::Duration::from_millis(((self.last_pts - self.init_pts.unwrap_or(0.)) * 1000.) as u64)
             .checked_sub((time::Instant::now() - self.start)) {
             debug!(log, "Final sleep to account for {:?} buffer ahead", dur);
             thread::sleep(dur);
@@ -57,7 +57,7 @@ impl Syncer {
     }
 
     fn sync(&mut self) {
-        if let Some(dur) = time::Duration::from_millis(((self.last_pts - self.init_pts.unwrap()) * 1000.) as u64)
+        if let Some(dur) = time::Duration::from_millis(((self.last_pts - self.init_pts.unwrap_or(0.)) * 1000.) as u64)
             .checked_sub(time::Duration::from_secs(SYNC_AHEAD) + (time::Instant::now() - self.start)) {
             thread::sleep(dur);
         }
