@@ -574,9 +574,6 @@ impl Output {
             }
 
             out_pkt.stream_index = 0;
-            sys::av_packet_rescale_ts(&mut out_pkt,
-                                      (*self.codec_ctx).time_base,
-                                      (*self.stream).time_base);
             let s = sys::av_q2d((*self.stream).time_base);
             let pts = s * out_pkt.pts as f64;
 

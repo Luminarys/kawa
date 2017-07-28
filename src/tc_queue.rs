@@ -92,6 +92,9 @@ impl Drop for QW {
 impl QR {
     pub fn next_buf(&self) -> Option<BufferData> {
         loop {
+            if self.cancel.load(atomic::Ordering::Acquire) {
+                return None;
+            }
             match self.queue.try_recv() {
                 Ok(b) => return Some(b),
                 Err(mpsc::TryRecvError::Empty) => {

@@ -18,7 +18,7 @@ struct RadioConn {
     handle: thread::JoinHandle<()>,
 }
 
-const SYNC_AHEAD: u64 = 4;
+const SYNC_AHEAD: u64 = 1;
 
 struct Syncer {
     last_pts: f64,
@@ -165,6 +165,9 @@ pub fn start_streams(cfg: Config,
                     debug!(log, "Received API message {:?}", msg);
                     match msg {
                         ApiMessage::Skip => {
+                            for token in tokens {
+                                token.store(true, Ordering::Release);
+                            }
                             break;
                         }
                         ApiMessage::Clear => {

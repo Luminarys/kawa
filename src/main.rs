@@ -98,6 +98,7 @@ mod tests {
     use std::{thread, io};
     use std::fs::File;
 
+    #[ignore]
     #[test]
     fn test_tc() {
         #[cfg(feature = "nightly")]

@@ -474,7 +474,7 @@ impl Chunker {
         Chunker::Header(CHUNK_HEADER)
     }
 
-    fn write(&mut self, conn: &mut TcpStream, data: &[u8]) -> io::Result<Option<usize>> {
+    fn write<T: io::Write>(&mut self, conn: &mut T, data: &[u8]) -> io::Result<Option<usize>> {
         match *self {
             Chunker::Header(s) => {
                 let amnt = conn.write(s.as_bytes())?;
@@ -524,4 +524,12 @@ impl Chunker {
 
 #[test]
 fn test_footer_transition() {
+    use std::io::Cursor;
+    let mut c = Chunker::Footer("hello world");
+    let mut d = [0u8; 5];
+    let mut v = Cursor::new(&mut d[..]);
+    c.write(&mut v, &[]).unwrap();
+    assert_eq!(v.into_inner(), b"hello");
+    if let Chunker::Footer(" world") = c {
+    } else { unreachable!() };
 }
