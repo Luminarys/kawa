@@ -7,6 +7,7 @@ pub use sys::AVCodecID;
 
 use std::ffi::{CString, CStr};
 use std::io::{self, Read, Write};
+use std::cell::Cell;
 use std::{slice, ptr, mem, time};
 use libc::{c_char, c_int, c_void, uint8_t};
 
@@ -77,6 +78,8 @@ pub struct Output {
     ctx: *mut sys::AVFormatContext,
     codec_ctx: *mut sys::AVCodecContext,
     stream: *mut sys::AVStream,
+    pts: Cell<f64>,
+    itb: sys::AVRational,
     _opaque: Opaque,
     header_signal: fn(*mut c_void),
     packet_signal: fn(*mut c_void, f64),
@@ -151,6 +154,10 @@ impl Graph {
     }
 
     unsafe fn process_frame(&self, frame: *mut sys::AVFrame) -> Result<()> {
+        if !frame.is_null() {
+        let s = sys::av_q2d((*self.input.input.codec_ctx).time_base);
+        // println!("Read frame with pts: {}", (*frame).pts as f64 * s);
+        }
         // Push the frame into the graph source
         match sys::av_buffersrc_add_frame_flags(self.input.ctx, frame, sys::AV_BUFFERSRC_FLAG_KEEP_REF as i32) {
             0 => { }
@@ -162,7 +169,13 @@ impl Graph {
         for output in self.outputs.iter() {
             loop {
                 match sys::av_buffersink_get_frame(output.ctx, self.out_frame) {
-                    0 => { }
+                    0 => {
+                        let s = sys::av_q2d((*self.input.input.codec_ctx).time_base);
+                        // println!("graph out frame with pts: {}", (*self.out_frame).pts as f64 * s);
+                        // Rescale the timebase
+                        //(*self.out_frame).pts =
+                        //    sys::av_rescale_q((*self.out_frame).pts, (*self.input.input.codec_ctx).time_base, (*output.output.codec_ctx).time_base);
+                    }
                     e if e == sys::AVERROR(libc::EAGAIN) => { break }
                     e if e == sys::AVERROR_EOF => { break }
                     e => return Err(ErrorKind::FFmpeg("failed to get frame from graph sink", e).into()),
@@ -232,7 +245,7 @@ impl GraphBuilder {
         }
     }
 
-    pub fn add_output(&mut self, output: Output) -> Result<&mut Self> {
+    pub fn add_output(&mut self, mut output: Output) -> Result<&mut Self> {
         let id = format!("out{}", self.outputs.len());
         unsafe {
             // Configure the encoder based on the decoder, then initialize it
@@ -246,6 +259,7 @@ impl GraphBuilder {
             } else {
                 (*output.codec_ctx).sample_rate = (*input.codec_ctx).sample_rate;
             }
+            output.itb = (*self.input.input.stream).time_base;
             if (*output.codec_ctx).bit_rate == 0 {
                 (*output.codec_ctx).bit_rate = (*input.codec_ctx).bit_rate;
             }
@@ -470,6 +484,7 @@ impl Input {
                     sys::av_packet_unref(&mut packet);
                 }
             }
+            // sys::av_packet_rescale_ts(&mut packet, (*self.stream).time_base, (*self.codec_ctx).time_base);
 
             match { let r = sys::avcodec_send_packet(self.codec_ctx, &packet); sys::av_packet_unref(&mut packet); r} {
                 0 => { }
@@ -480,7 +495,10 @@ impl Input {
             loop {
                 // Try to get a frame, if not try to read packets and decode them
                 match sys::avcodec_receive_frame(self.codec_ctx, frame) {
-                    0 => { f()?; },
+                    0 => {
+                        (*frame).pts = sys::av_frame_get_best_effort_timestamp((frame));
+                        f()?;
+                    },
                     e if e == sys::AVERROR(libc::EAGAIN) => { break; }
                     e if e == sys::AVERROR_EOF => { break 'outer; }
                     e => { return Err(ErrorKind::FFmpeg("failed to receive frame", e).into()); }
@@ -552,6 +570,8 @@ impl Output {
                 header_signal: sink_header_written::<T>,
                 packet_signal: sink_packet_written::<T>,
                 body_signal: sink_body_written::<T>,
+                pts: Cell::new(0.),
+                itb: sys::AVRational { num: 0, den: 0 },
             })
         }
     }
@@ -561,6 +581,13 @@ impl Output {
         out_pkt.data = ptr::null_mut();
         out_pkt.size = 0;
         sys::av_init_packet(&mut out_pkt);
+        let s = sys::av_q2d((*self.stream).time_base);
+        if !frame.is_null() {
+            // self.pts.set((*frame).pts as f64 * s);
+            self.pts.set(self.pts.get() + (*frame).nb_samples as f64 * s);
+            //println!("est pts: {}", self.pts.get());
+            //println!("noted pts: {}", (*frame).pts as f64 * s);
+        }
         match sys::avcodec_send_frame(self.codec_ctx, frame) {
             0 => { }
             e => return Err(ErrorKind::FFmpeg("failed to send frame to encoder", e).into()),
@@ -574,9 +601,9 @@ impl Output {
             }
 
             out_pkt.stream_index = 0;
-            let s = sys::av_q2d((*self.stream).time_base);
-            let pts = s * out_pkt.pts as f64;
-
+            sys::av_packet_rescale_ts(&mut out_pkt, (*self.codec_ctx).time_base, (*self.stream).time_base);
+            let pts = out_pkt.pts as f64 * s;
+            // println!("scaled pts: {}", pts);
             match { let r = sys::av_write_frame(self.ctx, &mut out_pkt); sys::av_packet_unref(&mut out_pkt); r } {
                 0 => { }
                 e => return Err(ErrorKind::FFmpeg("failed to write packet", e).into()),
@@ -745,6 +772,7 @@ mod tests {
     fn test_run_graph() {
         init();
         run_graph().unwrap();
+        panic!();
     }
 
     fn run_graph() -> Result<()> {
@@ -761,9 +789,9 @@ mod tests {
         let o4 = Output::new_writer(fout4, "mp3", super::AVCodecID::AV_CODEC_ID_MP3, None)?;
         let mut gb = GraphBuilder::new(i)?;
         gb.add_output(o1)?;
-        gb.add_output(o2)?;
-        gb.add_output(o3)?;
-        gb.add_output(o4)?;
+        // gb.add_output(o2)?;
+        // gb.add_output(o3)?;
+        // gb.add_output(o4)?;
         gb.build()?.run()
     }
 

@@ -18,7 +18,7 @@ struct RadioConn {
     handle: thread::JoinHandle<()>,
 }
 
-const SYNC_AHEAD: u64 = 1;
+const SYNC_AHEAD: u64 = 0;
 
 struct Syncer {
     last_pts: f64,
@@ -91,6 +91,7 @@ pub fn play(buffer_rec: Receiver<PreBuffer>, mid: usize, btx: amy::Sender<Buffer
     loop {
         match pb.buffer.next_buf() {
             Some(BufferData::Frame { data, pts } ) => {
+                // debug!("Processing frame at pts {:?}", pts);
                 syncer.update(pts);
                 btx.send(Buffer::new(mid, BufferData::Frame { data, pts })).unwrap();
                 syncer.sync();
