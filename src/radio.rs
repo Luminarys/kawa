@@ -15,7 +15,6 @@ use amy;
 
 struct RadioConn {
     tx: Sender<PreBuffer>,
-    handle: thread::JoinHandle<()>,
 }
 
 const SYNC_AHEAD: u64 = 1;
@@ -70,12 +69,11 @@ impl RadioConn {
            log: Logger) -> RadioConn {
         let (tx, rx) = mpsc::channel();
 
-        let handle = thread::spawn(move || {
+        thread::spawn(move || {
             play(rx, mid, btx, log);
         });
         RadioConn {
             tx: tx,
-            handle: handle,
         }
     }
 
@@ -187,7 +185,7 @@ pub fn start_streams(cfg: Config,
                         }
                     }
                 } else {
-                    thread::sleep(time::Duration::from_millis(100));
+                    thread::sleep(time::Duration::from_millis(20));
                 }
             }
         }
