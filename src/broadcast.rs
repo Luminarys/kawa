@@ -48,7 +48,7 @@ pub struct Buffer {
 #[derive(Clone, Debug)]
 pub enum BufferData {
     Header(Vec<u8>),
-    Frame(Vec<u8>),
+    Frame { data: Vec<u8>, pts: f64 },
     Trailer(Vec<u8>),
 }
 
@@ -185,7 +185,9 @@ impl Broadcaster {
     fn process_buffer(&mut self) {
         while let Ok(buf) = self.data.try_recv() {
             match buf.data {
-                BufferData::Header(ref f) | BufferData::Frame(ref f) | BufferData::Trailer(ref f) => {
+                BufferData::Header(ref f)
+                | BufferData::Frame { data: ref f, .. }
+                | BufferData::Trailer(ref f) => {
                     for id in self.client_mounts[buf.mount].clone() {
                         if {
                             let client = self.clients.get_mut(&id).unwrap();
@@ -488,7 +490,19 @@ impl Chunker {
                 let amnt = conn.write(&data[..cmp::min(CHUNK_SIZE - i, data.len())])?;
                 if i + amnt == CHUNK_SIZE {
                     *self = Chunker::Footer(CHUNK_FOOTER);
-                    self.write(conn, &data[amnt..]).map(|r| r.map(|a| a + amnt))
+                    // Continue writing, and add on the current amount
+                    // written to the result.
+                    // We ignore errors here for now, since they should
+                    // be reported later anyways. TODO: think more about it
+                    match self.write(conn, &data[amnt..]) {
+                        Ok(r) => {
+                            Ok(Some(match r {
+                                Some(a) => a + amnt,
+                                None => amnt
+                            }))
+                        }
+                        Err(_) => Ok(Some(amnt))
+                    }
                 } else {
                     *self = Chunker::Body(i + amnt);
                     Ok(Some(amnt))
@@ -500,10 +514,14 @@ impl Chunker {
                     *self = Chunker::Header(CHUNK_HEADER);
                     self.write(conn, data)
                 } else {
-                    *self = Chunker::Header(&s[amnt..]);
+                    *self = Chunker::Footer(&s[amnt..]);
                     Ok(None)
                 }
             }
         }
     }
+}
+
+#[test]
+fn test_footer_transition() {
 }

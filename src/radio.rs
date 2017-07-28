@@ -1,7 +1,7 @@
 use std::sync::{Arc, Mutex};
+use std::sync::atomic::Ordering;
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::thread;
-use std::time::{Instant, Duration};
+use std::{thread, time};
 
 use slog::Logger;
 use reqwest;
@@ -10,12 +10,58 @@ use queue::{Queue, QueueEntry};
 use api::{ApiMessage, QueuePos};
 use config::Config;
 use prebuffer::PreBuffer;
-use broadcast::Buffer;
+use broadcast::{Buffer, BufferData};
 use amy;
 
 struct RadioConn {
     tx: Sender<PreBuffer>,
     handle: thread::JoinHandle<()>,
+}
+
+const SYNC_AHEAD: u64 = 4;
+
+struct Syncer {
+    last_pts: f64,
+    init_pts: Option<f64>,
+    start: time::Instant,
+}
+
+impl Syncer {
+    fn new() -> Syncer {
+        Syncer {
+            last_pts: 0.,
+            init_pts: None,
+            start: time::Instant::now(),
+        }
+    }
+
+    fn update(&mut self, pts: f64) {
+        if self.init_pts.is_none() {
+            self.init_pts = Some(pts);
+        }
+        self.last_pts = pts;
+    }
+
+    fn new_song(&mut self) {
+        self.start = time::Instant::now();
+        self.init_pts = None;
+        self.last_pts = 0.;
+    }
+
+    fn done(&mut self, log: &Logger) {
+        if let Some(dur) = time::Duration::from_millis(((self.last_pts - self.init_pts.unwrap()) * 1000.) as u64)
+            .checked_sub((time::Instant::now() - self.start)) {
+            debug!(log, "Final sleep to account for {:?} buffer ahead", dur);
+            thread::sleep(dur);
+        }
+    }
+
+    fn sync(&mut self) {
+        if let Some(dur) = time::Duration::from_millis(((self.last_pts - self.init_pts.unwrap()) * 1000.) as u64)
+            .checked_sub(time::Duration::from_secs(SYNC_AHEAD) + (time::Instant::now() - self.start)) {
+            thread::sleep(dur);
+        }
+    }
 }
 
 impl RadioConn {
@@ -41,16 +87,28 @@ impl RadioConn {
 pub fn play(buffer_rec: Receiver<PreBuffer>, mid: usize, btx: amy::Sender<Buffer>, log: Logger) {
     debug!(log, "Awaiting initial buffer");
     let mut pb = buffer_rec.recv().unwrap();
-    pb.buffer.start();
+    let mut syncer = Syncer::new();
     loop {
         match pb.buffer.next_buf() {
-            Some(b) => {
+            Some(BufferData::Frame { data, pts } ) => {
+                syncer.update(pts);
+                btx.send(Buffer::new(mid, BufferData::Frame { data, pts })).unwrap();
+                syncer.sync();
+            }
+            Some(b @ BufferData::Header(_) ) => {
+                syncer.new_song();
+                btx.send(Buffer::new(mid, b)).unwrap();
+            }
+            Some(b @ BufferData::Trailer(_) ) => {
                 btx.send(Buffer::new(mid, b)).unwrap();
             }
             None => {
+                pb.buffer.cancel.store(true, Ordering::Release);
                 debug!(log, "Buffer drained, waiting for next!");
                 pb = buffer_rec.recv().unwrap();
-                pb.buffer.start();
+                debug!(log, "Received next buffer, syncing for remaining time!");
+                syncer.done(&log);
+                debug!(log, "Sync complete, resuming!");
             }
         }
     }
@@ -75,12 +133,14 @@ pub fn start_streams(cfg: Config,
         let prebuffers = queue.lock().unwrap().get_next_tc();
 
         debug!(log, "Dispatching new buffers");
-        for (rconn, pb) in rconns.iter_mut().zip(prebuffers.iter()) {
-            // The order is guarenteed to be correct because we always iterate by the config
-            // ordering.
-            rconn.replace_buffer(pb.clone());
-        }
-        let end_time = Instant::now() + *queue.lock().unwrap().np().duration();
+        // The order is guarenteed to be correct because we always iterate by the config
+        // ordering.
+        let tokens: Vec<_> = rconns.iter_mut().zip(prebuffers.into_iter())
+            .map(|(rconn, pb)| {
+                let tok = pb.buffer.cancel.clone();
+                rconn.replace_buffer(pb);
+                tok
+            }).collect();
 
         debug!(log, "Broadcasting np");
         let np = queue.lock().unwrap().np().entry().clone();
@@ -88,6 +148,7 @@ pub fn start_streams(cfg: Config,
             warn!(log, "Failed to broadcast np: {}", e);
         }
 
+        queue.lock().unwrap().start_next_tc();
         debug!(log, "Entering main loop");
 
         // Song activity loop - ensures that the song is properly transcoding and handles any sort
@@ -95,13 +156,7 @@ pub fn start_streams(cfg: Config,
         loop {
             // If any prebuffer completes, just move on to next song. We want to minimize downtime
             // even if it means some songs get cut off early
-            if prebuffers.iter().any(|pb| pb.buffer.done()) {
-                let now = Instant::now();
-                // Protection in case duration gives a non sane value
-                if end_time > now && end_time - now < Duration::from_secs(10) {
-                    debug!(log, "Sleeping for {:?} to make up for difference in duration", end_time - now);
-                    thread::sleep(end_time - now);
-                }
+            if tokens.iter().any(|tok| tok.load(Ordering::Acquire)) {
                 break;
             } else {
                 if let Ok(msg) = updates.try_recv() {
@@ -129,7 +184,7 @@ pub fn start_streams(cfg: Config,
                         }
                     }
                 } else {
-                    thread::sleep(Duration::from_millis(100));
+                    thread::sleep(time::Duration::from_millis(100));
                 }
             }
         }

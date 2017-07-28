@@ -78,10 +78,11 @@ fn main() {
         }
     };
 
-    let api_log = root_log.new(o!("API, port" => config.api.port));
-    let queue_log = root_log.new(o!("Queue" => ()));
-    let radio_log = root_log.new(o!("Radio, streams" => config.streams.len()));
+    let api_log = root_log.new(o!("thread" => "api"));
+    let queue_log = root_log.new(o!("queue" => ()));
+    let radio_log = root_log.new(o!("thread" => "radio"));
 
+    info!(root_log, "Starting");
     let queue = Arc::new(Mutex::new(queue::Queue::new(config.clone(), queue_log)));
     let listeners = Arc::new(Mutex::new(HashMap::new()));
     let (tx, rx) = mpsc::channel();
