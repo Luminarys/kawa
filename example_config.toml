@@ -1,23 +1,52 @@
 [api]
+#
+# The HTTP port the Kawa API listens on. Kawa will listen on localhost.
 port=4040
 
 [queue]
+# 
+# An HTTP GET is sent to this URL when Kawa's queue is empty and it needs a new
+# random track to play. The expected response is an arbitrary JSON blob that
+# Kawa stores in its queue. At a minimum, it must include the "path" property:
+#
+# {
+#   "path": "/path/to/audio/file"
+# }
+#
+# The path is the path to an audio file on the filesystem you want Kawa to play.
 random_song_api="http://localhost:8012/api/random"
+#
+# An HTTP POST is issued to this URL when Kawa starts playing a track. The body
+# will be identical to the JSON blob in the queue.
 np="http://localhost:8012/api/np"
+#
+# When no tracks are available for whatever reason (such as external service
+# outages), this track will be played.
 fallback="/tmp/in.flac"
 
 [radio]
+#
+# The port to stream actual audio on. Kawa will listen on localhost.
 port=8001
 
+#
+# A list of streams to make available at [radio.port]/(mount) follows. The
+# following properties are available:
+#
+# mount: the HTTP address to serve the stream from
+# container: the container format to use (ogg or mp3)
+# codec: the audio codec to use (opus or flac, do not specify for mp3 streams)
+# bitrate: the desired bitrate of the stream in Kb/s (mp3 or opus only, do not
+#   specify this for flac streams)
 [[streams]]
 mount="stream128.mp3"
-bitrate=128
 container="mp3"
+bitrate=128
 
 [[streams]]
 mount="stream192.mp3"
-bitrate=192
 container="mp3"
+bitrate=192
 
 [[streams]]
 mount="stream128.opus"
