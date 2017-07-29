@@ -43,7 +43,7 @@ the queue until it is exhausted, then request new tracks from
 ```json
 [
     {
-        "mount": "/stream256.opus",
+        "mount": "stream256.opus",
         "path": "/stream256.opus?user=minus",
         "headers": [
             {
