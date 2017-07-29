@@ -47,10 +47,9 @@ impl Syncer {
         self.last_pts = 0.;
     }
 
-    fn done(&mut self, log: &Logger) {
+    fn done(&mut self) {
         if let Some(dur) = time::Duration::from_millis(((self.last_pts - self.init_pts.unwrap_or(0.)) * 1000.) as u64)
             .checked_sub((time::Instant::now() - self.start)) {
-            debug!(log, "Final sleep to account for {:?} buffer ahead", dur);
             thread::sleep(dur);
         }
     }
@@ -105,7 +104,7 @@ pub fn play(buffer_rec: Receiver<PreBuffer>, mid: usize, btx: amy::Sender<Buffer
                 debug!(log, "Buffer drained, waiting for next!");
                 pb = buffer_rec.recv().unwrap();
                 debug!(log, "Received next buffer, syncing for remaining time!");
-                syncer.done(&log);
+                syncer.done();
                 debug!(log, "Sync complete, resuming!");
             }
         }

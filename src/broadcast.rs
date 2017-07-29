@@ -10,7 +10,7 @@ use slog::Logger;
 use api;
 use config::{Config, StreamConfig, Container};
 
-const CLIENT_BUFFER_LEN: usize = 4096;
+const CLIENT_BUFFER_LEN: usize = 16384;
 // Number of frames to buffer by
 const BACK_BUFFER_LEN: usize = 256;
 // Seconds of inactivity until client timeout

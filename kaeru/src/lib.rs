@@ -134,7 +134,7 @@ impl Graph {
 
     unsafe fn execute_tc(&mut self) -> Result<()> {
         self.input.input.read_frames(self.in_frame, || {
-            (*self.in_frame).pkt_pts = sys::av_frame_get_best_effort_timestamp(self.in_frame);
+            (*self.in_frame).pts = sys::av_frame_get_best_effort_timestamp(self.in_frame);
             let pres = self.process_frame(self.in_frame);
             sys::av_frame_unref(self.in_frame);
             pres
@@ -574,6 +574,7 @@ impl Output {
                 e => return Err(ErrorKind::FFmpeg("failed to get packet from encoder", e).into()),
             }
 
+            sys::av_packet_rescale_ts(&mut out_pkt, (*self.codec_ctx).time_base, (*self.stream).time_base);
             out_pkt.stream_index = 0;
             let s = sys::av_q2d((*self.stream).time_base);
             let pts = s * out_pkt.pts as f64;
