@@ -17,7 +17,7 @@ struct RadioConn {
     tx: Sender<PreBuffer>,
 }
 
-const SYNC_AHEAD: u64 = 1;
+const SYNC_AHEAD: u64 = 0;
 
 struct Syncer {
     last_pts: f64,
@@ -48,6 +48,7 @@ impl Syncer {
     }
 
     fn done(&mut self) {
+        println!("Finsiehd at pts {}", self.last_pts);
         if let Some(dur) = time::Duration::from_millis(((self.last_pts - self.init_pts.unwrap_or(0.)) * 1000.) as u64)
             .checked_sub((time::Instant::now() - self.start)) {
             thread::sleep(dur);
@@ -88,6 +89,7 @@ pub fn play(buffer_rec: Receiver<PreBuffer>, mid: usize, btx: amy::Sender<Buffer
     loop {
         match pb.buffer.next_buf() {
             Some(BufferData::Frame { data, pts } ) => {
+                println!("got pts: {}", pts);
                 syncer.update(pts);
                 btx.send(Buffer::new(mid, BufferData::Frame { data, pts })).unwrap();
                 syncer.sync();
@@ -100,6 +102,7 @@ pub fn play(buffer_rec: Receiver<PreBuffer>, mid: usize, btx: amy::Sender<Buffer
                 btx.send(Buffer::new(mid, b)).unwrap();
             }
             None => {
+                panic!();
                 pb.buffer.cancel.store(true, Ordering::Release);
                 debug!(log, "Buffer drained, waiting for next!");
                 pb = buffer_rec.recv().unwrap();

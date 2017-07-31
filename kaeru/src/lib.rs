@@ -40,30 +40,24 @@ macro_rules! ck_null {
 const FFMPEG_BUFFER_SIZE: usize = 4096;
 
 pub struct Graph {
-    #[allow(dead_code)] // The graph needs to be kept as context for the filters
-    graph: GraphP,
-    #[allow(dead_code)]
-    splitter: *mut sys::AVFilterContext, // We don't actually need this, but it's nice to have
     in_frame: *mut sys::AVFrame,
-    out_frame: *mut sys::AVFrame,
     input: GraphInput,
     outputs: Vec<GraphOutput>,
 }
 
 pub struct GraphBuilder {
-    graph: GraphP,
     input: GraphInput,
     outputs: Vec<GraphOutput>,
 }
 
 struct GraphOutput {
     output: Output,
-    ctx: *mut sys::AVFilterContext,
+    frame: *mut sys::AVFrame,
+    swr: *mut sys::SwrContext,
 }
 
 struct GraphInput {
     input: Input,
-    ctx: *mut sys::AVFilterContext,
 }
 
 pub struct Input {
@@ -98,10 +92,6 @@ struct Opaque {
     cleanup: fn(*mut c_void),
 }
 
-struct GraphP {
-    ptr: *mut sys::AVFilterGraph,
-}
-
 pub trait Sink : Write {
     fn header_written(&mut self) { }
     fn packet_written(&mut self, _: f64) { }
@@ -113,6 +103,7 @@ impl Graph {
         unsafe {
             // Write header
             for o in self.outputs.iter() {
+                o.configure_frame();
                 match sys::avformat_write_header(o.output.ctx, ptr::null_mut()) {
                     0 => {
                         (o.output.header_signal)(o.output._opaque.ptr);
@@ -133,15 +124,17 @@ impl Graph {
     }
 
     unsafe fn execute_tc(&mut self) -> Result<()> {
+        self.configure_frame();
         self.input.input.read_frames(self.in_frame, || {
             (*self.in_frame).pts = sys::av_frame_get_best_effort_timestamp(self.in_frame);
             let pres = self.process_frame(self.in_frame);
             sys::av_frame_unref(self.in_frame);
+            self.configure_frame();
             pres
         })?;
 
         // Flush everything
-        self.process_frame(ptr::null_mut())?;
+        // self.process_frame(ptr::null_mut())?;
         for o in self.outputs.iter_mut() {
             // If the codec needs flushing, do so
             if ((*(*o.output.codec_ctx).codec).capabilities as u32 & sys::AV_CODEC_CAP_DELAY) != 0 {
@@ -151,41 +144,85 @@ impl Graph {
         Ok(())
     }
 
-    unsafe fn process_frame(&self, frame: *mut sys::AVFrame) -> Result<()> {
-        // Push the frame into the graph source
-        match sys::av_buffersrc_add_frame_flags(self.input.ctx, frame, sys::AV_BUFFERSRC_FLAG_KEEP_REF as i32) {
-            0 => { }
-            e => return Err(ErrorKind::FFmpeg("failed to add frame to graph source", e).into()),
-        }
-
-        // Pull out frames from each graph sink, sends them into the codecs for encoding, then
-        // writes out the received packets
+    unsafe fn process_frame(&self, frame: *const sys::AVFrame) -> Result<()> {
         for output in self.outputs.iter() {
+            let mut sampleData = [ptr::null_mut(); 2];
+            let err = sys::av_samples_alloc(
+                sampleData.as_mut_ptr(),
+                ptr::null_mut(),
+                (*output.output.codec_ctx).channels,
+                (*output.frame).nb_samples,
+                (*output.output.codec_ctx).sample_fmt,
+                0,
+            );
+            if err < 0 {
+                return Err(ErrorKind::FFmpeg("failed to allocate sample data", err).into())
+            }
+
+            let mut out = sys::swr_convert(output.swr, ptr::null_mut(), 0, mem::transmute((*frame).data.as_ptr()), (*frame).nb_samples);
+            if out < 0 {
+                return Err(ErrorKind::FFmpeg("failed to resample input data", out).into())
+            }
             loop {
-                match sys::av_buffersink_get_frame(output.ctx, self.out_frame) {
-                    0 => { }
-                    e if e == sys::AVERROR(libc::EAGAIN) => { break }
-                    e if e == sys::AVERROR_EOF => { break }
-                    e => return Err(ErrorKind::FFmpeg("failed to get frame from graph sink", e).into()),
+                out = sys::swr_get_out_samples(output.swr, 0);
+                if out < (*output.output.codec_ctx).frame_size * (*output.output.codec_ctx).channels {
+                    break;
                 }
 
-                { let r = output.output.write_frame(self.out_frame); sys::av_frame_unref(self.out_frame); r}?;
+                out = sys::swr_convert(
+                    output.swr,
+                    sampleData.as_mut_ptr(),
+                    (*output.frame).nb_samples,
+                    ptr::null_mut(),
+                    0
+                );
+                if out < 0 {
+                    return Err(ErrorKind::FFmpeg("failed to resample output data", out).into())
+                }
+
+                let buffer_size = sys::av_samples_get_buffer_size(
+                    ptr::null_mut(),
+                    (*output.output.codec_ctx).channels,
+                    (*output.frame).nb_samples,
+                    (*output.output.codec_ctx).sample_fmt,
+                    0,
+                );
+                if buffer_size < 0 {
+                    return Err(ErrorKind::FFmpeg("failed to get sample buffer size", buffer_size).into())
+                }
+
+                let fill = sys::avcodec_fill_audio_frame(
+                    output.frame,
+                    (*output.output.codec_ctx).channels,
+                    (*output.output.codec_ctx).sample_fmt,
+                    sampleData[0],
+                    buffer_size,
+                    0
+                );
+                // The output pts appears to be a "real" pts, set it back to normal
+                let pts = (sys::swr_next_pts(output.swr, i64::min_value()) as f64)*sys::av_q2d((*self.input.input.codec_ctx).time_base);
+                (*output.frame).pts = pts as i64;
+
+                if fill < 0 {
+                    return Err(ErrorKind::FFmpeg("failed to fill frame", fill).into())
+                }
+
+                let r = output.output.write_frame(output.frame);
+                sys::av_frame_unref(output.frame);
+                r?;
             }
-            sys::av_frame_unref(self.out_frame);
         }
         Ok(())
     }
 
     unsafe fn flush(&self) {
-        sys::av_buffersrc_add_frame_flags(self.input.ctx, ptr::null_mut(), 0);
-        for output in self.outputs.iter() {
-            loop {
-                match sys::av_buffersink_get_frame(output.ctx, self.out_frame) {
-                    0 => { sys::av_frame_unref(self.out_frame); }
-                    _ => break
-                }
-            }
-        }
+    }
+
+    unsafe fn configure_frame(&self) {
+        (*self.in_frame).format = (*self.input.input.codec_ctx).sample_fmt as i32;
+        (*self.in_frame).channel_layout = (*self.input.input.codec_ctx).channel_layout;
+        (*self.in_frame).channels = (*self.input.input.codec_ctx).channels;
+        (*self.in_frame).sample_rate = (*self.input.input.codec_ctx).sample_rate;
     }
 }
 
@@ -194,7 +231,6 @@ impl Drop for Graph {
         unsafe {
             self.flush();
             sys::av_frame_free(&mut self.in_frame);
-            sys::av_frame_free(&mut self.out_frame);
         }
     }
 }
@@ -204,37 +240,16 @@ unsafe impl Send for Graph { }
 impl GraphBuilder {
     pub fn new(input: Input) -> Result<GraphBuilder> {
         unsafe {
-            let graph = sys::avfilter_graph_alloc();
-            ck_null!(graph);
-            let buffersrc = sys::avfilter_get_by_name(str_conv!("abuffer"));
-            ck_null!(buffersrc);
-            let buffersrc_ctx = sys::avfilter_graph_alloc_filter(graph, buffersrc, str_conv!("in"));
-            ck_null!(buffersrc_ctx);
-            let time_base = (*input.stream).time_base;
-            let sample_fmt = CStr::from_ptr(sys::av_get_sample_fmt_name((*input.codec_ctx).sample_fmt))
-                .to_str().chain_err(|| "failed to parse format!")?;
-            let args = format!("time_base={}/{}:sample_rate={}:sample_fmt={}:channel_layout=0x{:X}",
-                               time_base.num, time_base.den, (*input.codec_ctx).sample_rate,
-                               sample_fmt, (*input.codec_ctx).channel_layout);
-
-            match sys::avfilter_init_str(buffersrc_ctx, str_conv!(&args[..])) {
-                0 => { }
-                e => return Err(ErrorKind::FFmpeg("failed to initialize buffersrc", e).into()),
-            }
-
             Ok(GraphBuilder {
                 input: GraphInput {
                     input,
-                    ctx: buffersrc_ctx,
                 },
                 outputs: Vec::new(),
-                graph: GraphP { ptr: graph },
             })
         }
     }
 
     pub fn add_output(&mut self, output: Output) -> Result<&mut Self> {
-        let id = format!("out{}", self.outputs.len());
         unsafe {
             // Configure the encoder based on the decoder, then initialize it
             let ref input = self.input.input;
@@ -257,7 +272,7 @@ impl GraphBuilder {
                 den: (*output.codec_ctx).sample_rate,
             };
             (*output.codec_ctx).time_base = time_base;
-            (*output.stream).time_base = time_base;
+            (*output.stream).time_base = (*output.codec_ctx).time_base;
 
             sys::av_dict_copy(&mut (*output.ctx).metadata, (*self.input.input.ctx).metadata, 0);
 
@@ -270,34 +285,40 @@ impl GraphBuilder {
                 e => return Err(ErrorKind::FFmpeg("failed to configure output stream", e).into()),
             }
 
-            // Create and configure the sink filter
-            let buffersink = sys::avfilter_get_by_name(str_conv!("abuffersink"));
-            ck_null!(buffersink);
-            let buffersink_ctx = sys::avfilter_graph_alloc_filter(self.graph.ptr, buffersink, str_conv!(&id[..]));
-            ck_null!(buffersink_ctx);
+            // Create and configure the resampler
+            // let swr = sys::swr_alloc_set_opts(
+            //     ptr::null_mut(),
+            //     (*output.codec_ctx).channel_layout as i64,
+            //     (*output.codec_ctx).sample_fmt,
+            //     (*output.codec_ctx).sample_rate,
+            //     (*input.codec_ctx).channel_layout as i64,
+            //     (*input.codec_ctx).sample_fmt,
+            //     (*input.codec_ctx).sample_rate,
+            //     0,
+            //     ptr::null_mut(),
+            // );
+            let swr = sys::swr_alloc();
+            ck_null!(swr);
+            let swr_p = swr as *mut c_void;
+            sys::av_opt_set_channel_layout(swr_p, str_conv!("in_channel_layout"), (*input.codec_ctx).channel_layout as i64, 0);
+            sys::av_opt_set_channel_layout(swr_p, str_conv!("out_channel_layout"), (*output.codec_ctx).channel_layout as i64, 0);
+            sys::av_opt_set_int(swr_p, str_conv!("in_sample_rate"), (*input.codec_ctx).sample_rate as i64, 0);
+            sys::av_opt_set_int(swr_p, str_conv!("out_sample_rate"), (*output.codec_ctx).sample_rate as i64, 0);
+            sys::av_opt_set_sample_fmt(swr_p, str_conv!("in_sample_fmt"), (*input.codec_ctx).sample_fmt, 0);
+            sys::av_opt_set_sample_fmt(swr_p, str_conv!("out_sample_fmt"), (*output.codec_ctx).sample_fmt, 0);
 
-            match sys::av_opt_set_bin(buffersink_ctx as *mut c_void, str_conv!("sample_rates"), mem::transmute(&(*output.codec_ctx).sample_rate),
-            mem::size_of_val(&(*output.codec_ctx).sample_rate) as c_int, sys::AV_OPT_SEARCH_CHILDREN) {
-                0 => { }
-                e => return Err(ErrorKind::FFmpeg("failed to configure buffersink sample_rates", e).into()),
+            match sys::swr_init(swr) {
+                0 => { },
+                e => return Err(ErrorKind::FFmpeg("failed to configure resampler", e).into()),
             }
-            match sys::av_opt_set_bin(buffersink_ctx as *mut c_void, str_conv!("sample_fmts"), mem::transmute(&(*output.codec_ctx).sample_fmt),
-            mem::size_of_val(&(*output.codec_ctx).sample_fmt) as c_int, sys::AV_OPT_SEARCH_CHILDREN) {
-                0 => { }
-                e => return Err(ErrorKind::FFmpeg("failed to configure buffersink sample_fmts", e).into()),
-            }
-            match sys::av_opt_set_bin(buffersink_ctx as *mut c_void, str_conv!("channel_layouts"), mem::transmute(&(*output.codec_ctx).channel_layout),
-            mem::size_of_val(&(*output.codec_ctx).channel_layout) as c_int, sys::AV_OPT_SEARCH_CHILDREN) {
-                0 => { }
-                e => return Err(ErrorKind::FFmpeg("failed to configure buffersink channel_layouts", e).into()),
-            }
-            match sys::avfilter_init_str(buffersink_ctx, ptr::null()) {
-                0 => { }
-                e => return Err(ErrorKind::FFmpeg("failed to initialize buffersink", e).into()),
-            }
+
+            let frame = sys::av_frame_alloc();
+            ck_null!(frame);
+
             self.outputs.push(GraphOutput {
                 output,
-                ctx: buffersink_ctx,
+                frame,
+                swr,
             });
         }
         Ok(self)
@@ -305,49 +326,12 @@ impl GraphBuilder {
 
     pub fn build(self) -> Result<Graph> {
         unsafe {
-            // Create the audio split filter and wire it up
-            let asplit = sys::avfilter_get_by_name(str_conv!("asplit"));
-            ck_null!(asplit);
-            let asplit_ctx = sys::avfilter_graph_alloc_filter(self.graph.ptr, asplit, str_conv!("splitter"));
-            ck_null!(asplit_ctx);
-            match sys::av_opt_set_int(asplit_ctx as *mut c_void, str_conv!("outputs"), self.outputs.len() as i64, sys::AV_OPT_SEARCH_CHILDREN) {
-                0 => { }
-                e => return Err(ErrorKind::FFmpeg("failed to configure asplit", e).into()),
-            }
-            match sys::avfilter_init_str(asplit_ctx, ptr::null()) {
-                0 => { }
-                e => return Err(ErrorKind::FFmpeg("failed to initialize asplit", e).into()),
-            }
-            match sys::avfilter_link(self.input.ctx, 0, asplit_ctx, 0) {
-                0 => { }
-                e => return Err(ErrorKind::FFmpeg("failed to link input to asplit", e).into()),
-            }
-
-            for (i, output) in self.outputs.iter().enumerate() {
-                match sys::avfilter_link(asplit_ctx, i as u32, output.ctx, 0) {
-                    0 => { }
-                    e => return Err(ErrorKind::FFmpeg("failed to link output to asplit", e).into()),
-                }
-            }
-
-            // validate the graph
-            match sys::avfilter_graph_config(self.graph.ptr, ptr::null_mut()) {
-                0 => { }
-                e => return Err(ErrorKind::FFmpeg("failed to configure the filtergraph", e).into()),
-            }
-
-            // Align frame sizes on the buffersinks
-            for o in self.outputs.iter() {
-                sys::av_buffersink_set_frame_size(o.ctx, (*o.output.codec_ctx).frame_size as u32);
-            }
-
+            let in_frame = sys::av_frame_alloc();
+            ck_null!(in_frame);
             Ok(Graph {
-                graph: self.graph,
                 input: self.input,
                 in_frame: sys::av_frame_alloc(),
-                out_frame: sys::av_frame_alloc(),
                 outputs: self.outputs,
-                splitter: asplit_ctx,
             })
         }
     }
@@ -471,6 +455,9 @@ impl Input {
                     sys::av_packet_unref(&mut packet);
                 }
             }
+            let s = sys::av_q2d((*self.stream).time_base);
+            sys::av_packet_rescale_ts(&mut packet, (*self.stream).time_base, (*self.codec_ctx).time_base);
+            let s = sys::av_q2d((*self.codec_ctx).time_base);
 
             match { let r = sys::avcodec_send_packet(self.codec_ctx, &packet); sys::av_packet_unref(&mut packet); r} {
                 0 => { }
@@ -578,6 +565,7 @@ impl Output {
             out_pkt.stream_index = 0;
             let s = sys::av_q2d((*self.stream).time_base);
             let pts = s * out_pkt.pts as f64;
+            // println!("Writing out final pts {}", pts);
 
             match { let r = sys::av_write_frame(self.ctx, &mut out_pkt); sys::av_packet_unref(&mut out_pkt); r } {
                 0 => { }
@@ -613,6 +601,25 @@ impl Drop for Output {
             sys::av_free((*self.ctx).pb as *mut c_void);
             sys::avformat_free_context(self.ctx);
             sys::avcodec_free_context(&mut self.codec_ctx);
+        }
+    }
+}
+
+impl GraphOutput {
+    unsafe fn configure_frame(&self) {
+        (*self.frame).channels = (*self.output.codec_ctx).channels;
+        (*self.frame).channel_layout = (*self.output.codec_ctx).channel_layout;
+        (*self.frame).format = (*self.output.codec_ctx).sample_fmt as i32;
+        (*self.frame).sample_rate = (*self.output.codec_ctx).sample_rate;
+        (*self.frame).nb_samples = (*self.output.codec_ctx).frame_size;
+    }
+}
+
+impl Drop for GraphOutput {
+    fn drop(&mut self) {
+        unsafe {
+            sys::swr_free(&mut self.swr);
+            sys::av_frame_free(&mut self.frame);
         }
     }
 }
@@ -665,14 +672,6 @@ fn sink_body_written<T: Sink + Sized>(opaque: *mut c_void) {
     unsafe {
         let s = &mut *(opaque as *mut T);
         s.body_written();
-    }
-}
-
-impl Drop for GraphP {
-    fn drop(&mut self) {
-        unsafe {
-            sys::avfilter_graph_free(&mut self.ptr);
-        }
     }
 }
 
@@ -746,7 +745,10 @@ mod tests {
     #[test]
     fn test_run_graph() {
         init();
-        run_graph().unwrap();
+        let res = run_graph();
+        if let Err(e) = res {
+            panic!("Failed: {}", e);
+        }
     }
 
     fn run_graph() -> Result<()> {
@@ -775,7 +777,7 @@ mod tests {
         let fin = File::open("/tmp/in.flac").unwrap();
         let i = Input::new(fin, "flac").unwrap();
         let md = i.metadata();
-        println!("{:?}", md);
+        // println!("{:?}", md);
         assert!(md.title.is_some());
     }
 }

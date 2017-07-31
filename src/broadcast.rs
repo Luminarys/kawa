@@ -16,8 +16,8 @@ const BACK_BUFFER_LEN: usize = 256;
 // Seconds of inactivity until client timeout
 const CLIENT_TIMEOUT: u64 = 10;
 
-const CHUNK_SIZE: usize = 1024;
-static CHUNK_HEADER: &'static str = "400\r\n";
+const CHUNK_SIZE: usize = 128;
+static CHUNK_HEADER: &'static str = "80\r\n";
 static CHUNK_FOOTER: &'static str = "\r\n";
 
 pub struct Broadcaster {

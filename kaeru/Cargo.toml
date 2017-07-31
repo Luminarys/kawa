@@ -2,7 +2,6 @@
 name = "kaeru"
 version = "0.1.0"
 authors = ["Luminarys <postmaster@gensok.io>"]
-links = "avutil"
 build = "build.rs"
 
 [features]
@@ -17,5 +16,5 @@ version = "0.10"
 [dependencies.ffmpeg-sys]
 version = "3.3.2"
 git = "https://github.com/meh/rust-ffmpeg-sys.git"
-default-features = true
-features = ["avcodec", "avfilter", "avformat"]
+default-features = false
+features = ["avcodec", "avfilter", "avformat", "swresample"]
