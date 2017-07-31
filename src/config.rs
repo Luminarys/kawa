@@ -84,7 +84,7 @@ impl InternalConfig {
                 "ogg" => Container::Ogg,
                 "mp3" => Container::MP3,
                 "flac" => Container::FLAC,
-                _ => return Err(format!("Currently, only ogg and mp3 are supported as containers.")),
+                _ => return Err(format!("Currently, only ogg, mp3, and flac are supported as containers.")),
             };
             let codec = if let Some(c) = s.codec {
                 match &*c {

@@ -9,37 +9,47 @@ pub struct QW {
     buf: io::Cursor<Vec<u8>>,
     writing_header: bool,
     writing_trailer: bool,
-    done: bool,
+    done: Arc<atomic::AtomicBool>,
 }
 
 pub struct QR {
-    pub cancel: Arc<atomic::AtomicBool>,
+    pub done: Arc<atomic::AtomicBool>,
     queue: mpsc::Receiver<BufferData>,
+}
+
+pub enum DequeueRes {
 }
 
 pub fn new() -> (QW, QR) {
     let (tx, rx) = mpsc::sync_channel(15);
+    let done = Arc::new(atomic::AtomicBool::new(false));
     (
-        QW::new(tx),
-        QR { queue: rx, cancel: Arc::new(atomic::AtomicBool::new(false)) }
+        QW::new(tx, done.clone()),
+        QR { queue: rx, done }
     )
 }
 
 impl QW {
-    fn new(q: mpsc::SyncSender<BufferData>) -> QW {
+    fn new(q: mpsc::SyncSender<BufferData>, done: Arc<atomic::AtomicBool>) -> QW {
         QW {
             queue: q,
             buf: io::Cursor::new(Vec::with_capacity(1024)),
             writing_header: true,
             writing_trailer: false,
-            done: false,
+            done,
         }
+    }
+
+    fn done(&self) -> bool {
+        self.done.load(atomic::Ordering::Acquire)
     }
 }
 
 impl io::Write for QW {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        if self.done {
+        if self.writing_trailer {
+            self.buf.write(&buf)
+        } else if self.done() {
             return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "Canceled!"));
         } else {
             self.buf.write(&buf)
@@ -57,11 +67,15 @@ impl Sink for QW {
         let nb = io::Cursor::new(Vec::with_capacity(1024));
         let ob = mem::replace(&mut self.buf, nb);
         if self.queue.send(BufferData::Header(ob.into_inner())).is_err() {
-            self.done = true;
+            self.done.store(true, atomic::Ordering::Release);
         }
     }
 
     fn packet_written(&mut self, pts: f64) {
+        if self.writing_trailer {
+            return;
+        }
+
         let nb = io::Cursor::new(Vec::with_capacity(1024));
         let ob = mem::replace(&mut self.buf, nb);
         let bd = BufferData::Frame {
@@ -69,7 +83,7 @@ impl Sink for QW {
             pts,
         };
         if self.queue.send(bd).is_err() {
-            self.done = true;
+            self.done.store(true, atomic::Ordering::Release);
         }
     }
 
@@ -85,16 +99,13 @@ impl Drop for QW {
             let ob = mem::replace(&mut self.buf, nb);
             if self.queue.send(BufferData::Trailer(ob.into_inner())).is_err() { }
         }
-        self.done = true;
+        self.done.store(true, atomic::Ordering::Release);
     }
 }
 
 impl QR {
     pub fn next_buf(&self) -> Option<BufferData> {
         loop {
-            if self.cancel.load(atomic::Ordering::Acquire) {
-                return None;
-            }
             match self.queue.try_recv() {
                 Ok(b) => return Some(b),
                 Err(mpsc::TryRecvError::Empty) => {
@@ -110,6 +121,6 @@ impl QR {
 
 impl Drop for QR {
     fn drop(&mut self) {
-        self.cancel.store(true, atomic::Ordering::Release);
+        self.done.store(true, atomic::Ordering::Release);
     }
 }

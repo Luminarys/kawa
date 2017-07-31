@@ -100,7 +100,10 @@ pub fn play(buffer_rec: Receiver<PreBuffer>, mid: usize, btx: amy::Sender<Buffer
                 btx.send(Buffer::new(mid, b)).unwrap();
             }
             None => {
-                pb.buffer.cancel.store(true, Ordering::Release);
+                // TODO: Make this more fine grained so we know when a skip happened,
+                // and apply "time gain" to account for the last page that likely didn't
+                // go through
+                pb.buffer.done.store(true, Ordering::Release);
                 debug!(log, "Buffer drained, waiting for next!");
                 pb = buffer_rec.recv().unwrap();
                 debug!(log, "Received next buffer, syncing for remaining time!");
@@ -134,7 +137,7 @@ pub fn start_streams(cfg: Config,
         // ordering.
         let tokens: Vec<_> = rconns.iter_mut().zip(prebuffers.into_iter())
             .map(|(rconn, pb)| {
-                let tok = pb.buffer.cancel.clone();
+                let tok = pb.buffer.done.clone();
                 rconn.replace_buffer(pb);
                 tok
             }).collect();

@@ -121,12 +121,25 @@ impl Graph {
                 }
             }
 
-            let res = self.execute_tc();
+            let mut res = self.execute_tc();
+            if res.is_ok() {
+                res = self.try_flush();
+                for o in self.outputs.iter() {
+                    (o.output.body_signal)(o.output._opaque.ptr);
+                    sys::av_write_trailer(o.output.ctx);
+                }
+            } else {
+                for o in self.outputs.iter() {
+                    (o.output.body_signal)(o.output._opaque.ptr);
+                }
 
-            // Write trailers(this frees internal ctx data)
-            for o in self.outputs.iter() {
-                (o.output.body_signal)(o.output._opaque.ptr);
-                sys::av_write_trailer(o.output.ctx);
+                if self.try_flush().is_err() {
+                    // TODO: ?
+                }
+
+                for o in self.outputs.iter() {
+                    sys::av_write_trailer(o.output.ctx);
+                }
             }
             res
         }
@@ -140,14 +153,6 @@ impl Graph {
             pres
         })?;
 
-        // Flush everything
-        self.process_frame(ptr::null_mut())?;
-        for o in self.outputs.iter_mut() {
-            // If the codec needs flushing, do so
-            if ((*(*o.output.codec_ctx).codec).capabilities as u32 & sys::AV_CODEC_CAP_DELAY) != 0 {
-                o.output.write_frame(ptr::null_mut())?;
-            }
-        }
         Ok(())
     }
 
@@ -176,23 +181,29 @@ impl Graph {
         Ok(())
     }
 
-    unsafe fn flush(&self) {
-        sys::av_buffersrc_add_frame_flags(self.input.ctx, ptr::null_mut(), 0);
-        for output in self.outputs.iter() {
-            loop {
-                match sys::av_buffersink_get_frame(output.ctx, self.out_frame) {
-                    0 => { sys::av_frame_unref(self.out_frame); }
-                    _ => break
-                }
+    unsafe fn try_flush(&self) -> Result<()> {
+        let mut res = self.input.input.flush_frames(self.in_frame, || {
+            (*self.in_frame).pts = sys::av_frame_get_best_effort_timestamp(self.in_frame);
+            let pres = self.process_frame(self.in_frame);
+            sys::av_frame_unref(self.in_frame);
+            pres
+        });
+
+        // Flush everything
+        res = res.and(self.process_frame(ptr::null_mut()));
+        for o in self.outputs.iter() {
+            // If the codec needs flushing, do so
+            if ((*(*o.output.codec_ctx).codec).capabilities as u32 & sys::AV_CODEC_CAP_DELAY) != 0 {
+                res = res.and(o.output.write_frame(ptr::null_mut()));
             }
         }
+        res
     }
 }
 
 impl Drop for Graph {
     fn drop(&mut self) {
         unsafe {
-            self.flush();
             sys::av_frame_free(&mut self.in_frame);
             sys::av_frame_free(&mut self.out_frame);
         }
@@ -491,6 +502,33 @@ impl Input {
 
         Ok(())
     }
+
+    unsafe fn flush_frames<F: FnMut() -> Result<()>>(&self, frame: *mut sys::AVFrame, mut f: F) -> Result<()> {
+        if ((*(*self.codec_ctx).codec).capabilities as u32 & sys::AV_CODEC_CAP_DELAY) == 0 {
+            return Ok(());
+        }
+
+        let mut packet: sys::AVPacket = mem::uninitialized();
+        packet.data = ptr::null_mut();
+        packet.size = 0;
+
+        let mut res = match sys::avcodec_send_packet(self.codec_ctx, &packet) {
+            0 => Ok(()),
+            e => Err(ErrorKind::FFmpeg("failed to handle EOF packet", e).into()),
+        };
+
+        loop {
+            // Try to get a frame, if not try to read packets and decode them
+            let r = match sys::avcodec_receive_frame(self.codec_ctx, frame) {
+                0 => f(),
+                e if e == sys::AVERROR(libc::EAGAIN) => break,
+                e if e == sys::AVERROR_EOF => break,
+                e => Err(ErrorKind::FFmpeg("failed to receive frame", e).into()),
+            };
+            res = res.and(r);
+        }
+        res
+    }
 }
 
 impl Drop for Input {
@@ -542,6 +580,10 @@ impl Output {
                 (*codec_ctx).bit_rate = 0;
             }
             (*codec_ctx).sample_fmt = *(*codec).sample_fmts;
+            if container == "ogg" {
+                // Set page size to a small duration(0.05s), to minimize skip loss
+                sys::av_opt_set_int((*ctx).priv_data as *mut c_void, str_conv!("page_duration"), 50000, 0);
+            }
             let stream = sys::avformat_new_stream(ctx, codec);
             ck_null!(stream);
 
