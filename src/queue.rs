@@ -6,6 +6,8 @@ use reqwest;
 use prebuffer::PreBuffer;
 use slog::Logger;
 use serde_json as serde;
+use serde_json::Map;
+use serde_json::Value as JSON;
 use tc_queue;
 use kaeru;
 
@@ -23,7 +25,7 @@ pub struct Queue {
 
 #[derive(Clone, Debug, Deserialize, Default, Serialize, PartialEq)]
 pub struct QueueEntry {
-    pub id: i64,
+    pub data: Map<String, JSON>,
     pub path: String,
 }
 
@@ -119,7 +121,7 @@ impl Queue {
                 let tc = self.initiate_transcode(buf, ct).unwrap();
                 self.next = QueueBuffer {
                     bufs: tc,
-                    entry: QueueEntry { id: 0, path: "fallback".to_owned() },
+                    entry: QueueEntry { data: Map::new(), path: "fallback".to_owned() },
                 };
                 return;
             }
@@ -204,6 +206,24 @@ impl Queue {
         });
         self.counter += 1;
         Ok(prebufs)
+    }
+}
+
+impl QueueEntry {
+    pub fn deserialize(json: JSON) -> Option<QueueEntry> {
+        match json {
+            JSON::Object(mut o) => {
+                match o.remove("path") {
+                    Some(JSON::String(p)) => Some(QueueEntry { data: o, path: p }),
+                    _ => None,
+                }
+            }
+            _ => None
+        }
+    }
+
+    pub fn serialize(&self) -> JSON {
+        JSON::Object(self.data.clone())
     }
 }
 

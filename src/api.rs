@@ -79,14 +79,13 @@ impl Server {
                     let q = self.queue.lock().unwrap();
                     rouille::Response::from_data(
                         "application/json",
-                        serde::to_string(&q.entries()).unwrap())
+                        serde::to_string(&q.entries().iter().map(|e| e.serialize()).collect::<Vec<_>>()).unwrap())
                 },
 
                 (POST) (/queue/head) => {
-                    match serde::from_reader(req.data().unwrap()) {
-                        Ok(qe) => {
+                    match serde::from_reader(req.data().unwrap()).map(|d| QueueEntry::deserialize(d)) {
+                        Ok(Some(qe)) => {
                             debug!(self.log, "Handling queue head insert");
-                            let qe: QueueEntry = qe;
                             if Path::new(&qe.path).exists() {
                                 self.chan.lock().unwrap().send(ApiMessage::Insert(QueuePos::Head, qe)).unwrap();
                                 rouille::Response::from_data(
@@ -99,7 +98,7 @@ impl Server {
                                 ).with_status_code(400)
                             }
                         }
-                        Err(_) => {
+                        _ => {
                             rouille::Response::from_data(
                                 "application/json",
                                 serde::to_string(&Resp::failure("malformed body")).unwrap()
