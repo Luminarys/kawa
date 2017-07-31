@@ -25,6 +25,7 @@ pub struct StreamConfig {
 #[serde(deny_unknown_fields)]
 pub struct RadioConfig {
     pub port: u16,
+    pub name: String,
 }
 
 #[derive(Clone, Deserialize)]

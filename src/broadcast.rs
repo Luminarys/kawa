@@ -36,6 +36,7 @@ pub struct Broadcaster {
     listeners: api::Listeners,
     lid: usize,
     tid: usize,
+    name: String,
     log: Logger,
 }
 
@@ -118,6 +119,7 @@ impl Broadcaster {
             listeners,
             lid,
             tid,
+            name: cfg.radio.name.clone(),
             log,
         }, tx))
     }
@@ -233,7 +235,7 @@ impl Broadcaster {
                         self.reg.reregister(id, &inc.conn, amy::Event::Write).unwrap();
                         let mut client = Client::new(inc.conn);
                         // Send header, and buffered data
-                        if client.write_resp(&stream.config)
+                        if client.write_resp(&self.name, &stream.config)
                             .and_then(|_| client.send_data(&stream.header))
                             .and_then(|_| {
                                 // TODO: Consider edge case where the header is double sent
@@ -354,7 +356,7 @@ impl Client {
         }
     }
 
-    fn write_resp(&mut self, config: &StreamConfig) -> Result<(), ()> {
+    fn write_resp(&mut self, name: &str, config: &StreamConfig) -> Result<(), ()> {
         let lines = vec![
             format!("HTTP/1.1 200 OK"),
             format!("Server: {}/{}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION")),
@@ -366,6 +368,7 @@ impl Client {
             format!("Transfer-Encoding: chunked"),
             format!("Connection: keep-alive"),
             format!("Cache-Control: no-cache"),
+            format!("x-audiocast-name: {}", name),
         ];
         let data = lines.join("\r\n") + "\r\n\r\n";
         match self.conn.write(data.as_bytes()) {

@@ -28,6 +28,8 @@ fallback="/tmp/in.flac"
 #
 # The port to stream actual audio on. Kawa will listen on localhost.
 port=8001
+# Name of the stream.
+name="my radio"
 
 #
 # A list of streams to make available at [radio.port]/(mount) follows. The
