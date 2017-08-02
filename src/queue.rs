@@ -170,7 +170,8 @@ impl Queue {
         let res = reqwest::get(&self.cfg.queue.random.clone())
             .ok()
             .and_then(|mut r| r.read_to_string(&mut body).ok())
-            .and_then(|_| serde::from_str(&body).ok());
+            .and_then(|_| serde::from_str(&body).ok())
+            .and_then(|v| QueueEntry::deserialize(v));
         if res.is_some() {
             info!(self.log, "Using random entry {:?}", res.as_ref().unwrap());
         }
