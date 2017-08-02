@@ -194,7 +194,7 @@ pub fn start_streams(cfg: Config,
 fn broadcast_np(url: &str, song: QueueEntry) -> Result<(), reqwest::Error> {
     let client = reqwest::Client::new()?;
     client.post(url)?
-        .json(&song)?
+        .json(&song.serialize())?
         .send()?;
     Ok(())
 }
