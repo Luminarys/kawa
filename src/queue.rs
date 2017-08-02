@@ -212,8 +212,8 @@ impl Queue {
 impl QueueEntry {
     pub fn deserialize(json: JSON) -> Option<QueueEntry> {
         match json {
-            JSON::Object(mut o) => {
-                match o.remove("path") {
+            JSON::Object(o) => {
+                match o.get("path").cloned() {
                     Some(JSON::String(p)) => Some(QueueEntry { data: o, path: p }),
                     _ => None,
                 }

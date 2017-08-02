@@ -17,9 +17,6 @@ pub struct QR {
     queue: mpsc::Receiver<BufferData>,
 }
 
-pub enum DequeueRes {
-}
-
 pub fn new() -> (QW, QR) {
     let (tx, rx) = mpsc::sync_channel(15);
     let done = Arc::new(atomic::AtomicBool::new(false));

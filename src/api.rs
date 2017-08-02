@@ -98,10 +98,16 @@ impl Server {
                                 ).with_status_code(400)
                             }
                         }
-                        _ => {
+                        Ok(None) => {
                             rouille::Response::from_data(
                                 "application/json",
-                                serde::to_string(&Resp::failure("malformed body")).unwrap()
+                                serde::to_string(&Resp::failure("blob must contain path!")).unwrap()
+                            ).with_status_code(400)
+                        }
+                        Err(_) => {
+                            rouille::Response::from_data(
+                                "application/json",
+                                serde::to_string(&Resp::failure("malformed json sent")).unwrap()
                             ).with_status_code(400)
                         }
                     }
@@ -117,11 +123,11 @@ impl Server {
 
                 (POST) (/queue/tail) => {
                     debug!(self.log, "Handling queue tail insert");
-                    match serde::from_reader(req.data().unwrap()) {
-                        Ok(qe) => {
-                            let qe: QueueEntry = qe;
+                    match serde::from_reader(req.data().unwrap()).map(|d| QueueEntry::deserialize(d)) {
+                        Ok(Some(qe)) => {
+                            debug!(self.log, "Handling queue head insert");
                             if Path::new(&qe.path).exists() {
-                                self.chan.lock().unwrap().send(ApiMessage::Insert(QueuePos::Tail, qe)).unwrap();
+                                self.chan.lock().unwrap().send(ApiMessage::Insert(QueuePos::Head, qe)).unwrap();
                                 rouille::Response::from_data(
                                     "application/json",
                                     serde::to_string(&Resp::success()).unwrap())
@@ -132,10 +138,16 @@ impl Server {
                                 ).with_status_code(400)
                             }
                         }
+                        Ok(None) => {
+                            rouille::Response::from_data(
+                                "application/json",
+                                serde::to_string(&Resp::failure("blob must contain path!")).unwrap()
+                            ).with_status_code(400)
+                        }
                         Err(_) => {
                             rouille::Response::from_data(
                                 "application/json",
-                                serde::to_string(&Resp::failure("malformed body")).unwrap()
+                                serde::to_string(&Resp::failure("malformed json sent")).unwrap()
                             ).with_status_code(400)
                         }
                     }

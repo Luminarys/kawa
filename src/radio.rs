@@ -100,9 +100,6 @@ pub fn play(buffer_rec: Receiver<PreBuffer>, mid: usize, btx: amy::Sender<Buffer
                 btx.send(Buffer::new(mid, b)).unwrap();
             }
             None => {
-                // TODO: Make this more fine grained so we know when a skip happened,
-                // and apply "time gain" to account for the last page that likely didn't
-                // go through
                 pb.buffer.done.store(true, Ordering::Release);
                 debug!(log, "Buffer drained, waiting for next!");
                 pb = buffer_rec.recv().unwrap();
