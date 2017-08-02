@@ -63,7 +63,7 @@ impl Server {
                     let q = self.queue.lock().unwrap();
                     rouille::Response::from_data(
                         "application/json",
-                        serde::to_string(q.np().entry()).unwrap())
+                        serde::to_string(&q.np().entry().serialize()).unwrap())
                 },
 
                 (GET) (/listeners) => {
