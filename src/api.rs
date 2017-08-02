@@ -127,7 +127,7 @@ impl Server {
                         Ok(Some(qe)) => {
                             debug!(self.log, "Handling queue head insert");
                             if Path::new(&qe.path).exists() {
-                                self.chan.lock().unwrap().send(ApiMessage::Insert(QueuePos::Head, qe)).unwrap();
+                                self.chan.lock().unwrap().send(ApiMessage::Insert(QueuePos::Tail, qe)).unwrap();
                                 rouille::Response::from_data(
                                     "application/json",
                                     serde::to_string(&Resp::success()).unwrap())
