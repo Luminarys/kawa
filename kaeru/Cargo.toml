@@ -2,7 +2,6 @@
 name = "kaeru"
 version = "0.1.0"
 authors = ["Luminarys <postmaster@gensok.io>"]
-build = "build.rs"
 
 [features]
 default = ["ffmpeg-sys/static"]
@@ -15,6 +14,4 @@ version = "0.10"
 
 [dependencies.ffmpeg-sys]
 version = "3.3.2"
-git = "https://github.com/meh/rust-ffmpeg-sys.git"
-default-features = false
-features = ["static", "avcodec", "avdevice", "avfilter", "avformat", "swresample"]
+git = "https://github.com/Luminarys/rust-ffmpeg-sys.git"
