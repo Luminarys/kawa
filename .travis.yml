@@ -7,14 +7,17 @@ before_install:
 script:
 - docker run calycosa/kawa-build /bin/sh -c "cd /build/; ./build-kawa.sh $TRAVIS_COMMIT"
 before_deploy:
-  - mkdir ./artifacts
-  - docker run -v $TRAVIS_BUILD_DIR/artifacts:/artifacts calycosa/kawa-build /bin/sh -c "cd /build/; ./build-kawa.sh $TRAVIS_TAG release; mv kawa /artifacts/"
-  - strip ./artifacts/kawa
+  - mkdir ./kawa
+  - docker run -v $TRAVIS_BUILD_DIR/kawa:/artifacts calycosa/kawa-build /bin/sh -c "cd /build/; ./build-kawa.sh $TRAVIS_TAG release; mv kawa /artifacts/"
+    # TODO add in config, usage, licensing info
+  - strip ./kawa/kawa
+  - tar -zcvf kawa-$TRAVIS_BUILD_DIR.tar.gz ./kawa
 deploy:
   provider: releases
   api_key:
     secure: FFKtd12oNz94pwXXo17rj/pWbrVgX8jBDlw+SuntrrNNp79LZJe6iJXXxacXBLMpKAVkVilYzykwc6tHYDRy/Oi+56IRuPqxQeNnrnR8LQs+3+c8krHVbyjdSdVVza+RaSsEEH1qsj0cV1Tg15v7raY5GwXn/gSbf0uGgO0sD28Xd+AuWZAwXC9HpVbW1+4KZM7Ykhr3dXJo1eZ4E2oO2hmiF94bU5fB07sc2M9erFer+tdsGlCMFug9p0gX+Uvg1jqd9rA6ue7TRkNCQlfM8ZJAuD+G+YBH3Zd+fWXD2GByc2TZaIk4WV4oR117z2Xv12B/97QIXC/4OQAaJAFABRKPYgGwT4kEMwhT5gnqngXRVyPIm8+MJsnTM84YNr6iOVNsyASNuLdljt3Xsp0P2RO7dH68dwPNqaGLQ0fXzH7yUiz1xMDvJEZ32vKNofpMaQ8ywGUSVEiMYlAJIIntBgF9LcUfmyTT9lE4/FHvFHtV1EyjZQt7LnUK1uPwK9C/THi99BJnA+sw4aoQ4pE5dKPnMhTw632EZPvh+WzOduCxEYJP3M2pr66MvC5WVIYOvIM8UlYrgs0bBCpChtNu0ps1leAqqn0zemA4bjKOgA+kbvwQPZHiZytcazbb1zQ8uTo3x0pa6MpkrJ+CjnThoTSe+Mn1aICUjCS4BD/3Ox4=
-  file: ./artifacts/kawa
+  file_glob: true
+  file: kawa-*.tar.gz
   skip_cleanup: true
   on:
     tags: true
