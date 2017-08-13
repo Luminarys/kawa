@@ -3,9 +3,6 @@ name = "kaeru"
 version = "0.1.0"
 authors = ["Luminarys <postmaster@gensok.io>"]
 
-[features]
-default = ["ffmpeg-sys/static"]
-
 [dependencies.libc]
 version = "0.2"
 
