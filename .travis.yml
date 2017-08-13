@@ -9,6 +9,7 @@ script:
 before_deploy:
   - mkdir ./artifacts
   - docker run -v $TRAVIS_BUILD_DIR/artifacts:/artifacts calycosa/kawa-build /bin/sh -c "cd /build/; ./build-kawa.sh $TRAVIS_TAG release; mv kawa /artifacts/"
+  - strip ./artifacts/kawa
 deploy:
   provider: releases
   api_key:
