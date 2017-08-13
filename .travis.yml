@@ -11,7 +11,7 @@ before_deploy:
   - docker run -v $TRAVIS_BUILD_DIR/kawa:/artifacts calycosa/kawa-build /bin/sh -c "cd /build/; ./build-kawa.sh $TRAVIS_TAG release; mv kawa /artifacts/"
     # TODO add in config, usage, licensing info
   - strip ./kawa/kawa
-  - tar -zcvf kawa-$TRAVIS_BUILD_DIR.tar.gz ./kawa
+  - tar -zcvf kawa-$TRAVIS_TAG.tar.gz ./kawa
 deploy:
   provider: releases
   api_key:
