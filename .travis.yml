@@ -1,0 +1,10 @@
+sudo: required
+
+services:
+  - docker
+
+before_install:
+    - docker pull calycosa/kawa-build
+
+script:
+    - docker run calycosa/kawa-build /bin/sh -c "cd /build/; ./build-kawa.sh $TRAVIS_COMMIT"
