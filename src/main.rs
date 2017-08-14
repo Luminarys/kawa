@@ -11,8 +11,6 @@ extern crate serde;
 extern crate serde_json;
 extern crate reqwest;
 #[macro_use]
-extern crate lazy_static;
-#[macro_use]
 extern crate serde_derive;
 #[macro_use]
 extern crate rouille;
@@ -35,21 +33,13 @@ use std::env;
 use std::sync::{Arc, Mutex, mpsc};
 use std::io::{Read};
 use std::collections::HashMap;
-
-lazy_static! {
-    pub static ref LOG: slog::Logger = {
-        use slog::Drain;
-
-        let decorator = slog_term::TermDecorator::new().stderr().build();
-        let drain = slog_term::FullFormat::new(decorator).build().fuse();
-        let drain = slog_async::Async::new(drain).build().fuse();
-        slog::Logger::root(drain, o!())
-    };
-}
+use slog::Drain;
 
 fn main() {
-
-    let root_log = LOG.clone();
+    let decorator = slog_term::TermDecorator::new().stderr().build();
+    let drain = slog_term::FullFormat::new(decorator).build().fuse();
+    let drain = slog_async::Async::new(drain).build().fuse();
+    let root_log = slog::Logger::root(drain, o!());
 
     #[cfg(feature = "nightly")]
     info!(root_log, "Using system alloc");
