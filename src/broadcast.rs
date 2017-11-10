@@ -57,7 +57,15 @@ struct Client {
     conn: TcpStream,
     buffer: VecDeque<u8>,
     last_action: time::Instant,
+    agent: Agent,
     chunker: Chunker,
+}
+
+#[derive(PartialEq)]
+enum Agent {
+    MPV,
+    MPD,
+    Other,
 }
 
 struct Incoming {
@@ -186,23 +194,23 @@ impl Broadcaster {
 
     fn process_buffer(&mut self) {
         while let Ok(buf) = self.data.try_recv() {
-            match buf.data {
-                BufferData::Header(ref f)
-                | BufferData::Frame { data: ref f, .. }
-                | BufferData::Trailer(ref f) => {
-                    for id in self.client_mounts[buf.mount].clone() {
-                        if {
-                            let client = self.clients.get_mut(&id).unwrap();
-                            client.send_data(&f)
-                        }.is_err() {
-                            self.remove_client(&id);
-                        }
+            for id in self.client_mounts[buf.mount].clone() {
+                if {
+                    let client = self.clients.get_mut(&id).unwrap();
+                    if buf.data.is_data() || client.agent != Agent::MPV {
+                        client.send_data(buf.data.frame())
+                    } else {
+                        Ok(())
                     }
-                    let ref mut sb = self.streams[buf.mount].buffer;
-                    sb.push_back(f.clone());
-                    while sb.len() > BACK_BUFFER_LEN {
-                        sb.pop_front();
-                    }
+                }.is_err() {
+                    self.remove_client(&id);
+                }
+            }
+            {
+                let ref mut sb = self.streams[buf.mount].buffer;
+                sb.push_back(buf.data.frame().to_vec());
+                while sb.len() > BACK_BUFFER_LEN {
+                    sb.pop_front();
                 }
             }
             match buf.data {
@@ -216,7 +224,7 @@ impl Broadcaster {
 
     fn process_incoming(&mut self, id: usize) {
         match self.incoming.get_mut(&id).unwrap().process() {
-            Ok(Some((path, headers))) => {
+            Ok(Some((path, agent, headers))) => {
                 // Need this
                 let ub = Url::parse("http://localhost/").unwrap();
                 let url = if let Ok(u) = ub.join(&path) {
@@ -233,7 +241,7 @@ impl Broadcaster {
                         debug!(self.log, "Adding a client to stream {}", stream.config.mount);
                         // Swap to write only mode
                         self.reg.reregister(id, &inc.conn, amy::Event::Write).unwrap();
-                        let mut client = Client::new(inc.conn);
+                        let mut client = Client::new(inc.conn, agent);
                         // Send header, and buffered data
                         if client.write_resp(&self.name, &stream.config)
                             .and_then(|_| client.send_data(&stream.header))
@@ -295,6 +303,23 @@ impl Buffer {
     }
 }
 
+impl BufferData {
+    pub fn is_data(&self) -> bool {
+        match *self {
+            BufferData::Frame { .. } => true,
+            _ => false,
+        }
+    }
+
+    pub fn frame(&self) -> &[u8] {
+        match *self {
+            BufferData::Header(ref f)
+            | BufferData::Frame { data: ref f, .. }
+            | BufferData::Trailer(ref f) => f,
+        }
+    }
+}
+
 impl Incoming {
     fn new(conn: TcpStream) -> Incoming {
         conn.set_nonblocking(true).unwrap();
@@ -306,7 +331,7 @@ impl Incoming {
         }
     }
 
-    fn process(&mut self) -> Result<Option<(String, Vec<api::Header>)>, ()> {
+    fn process(&mut self) -> Result<Option<(String, Agent, Vec<api::Header>)>, ()> {
         self.last_action = time::Instant::now();
         if self.read().is_ok() {
             let mut headers = [httparse::EMPTY_HEADER; 16];
@@ -314,14 +339,25 @@ impl Incoming {
             match req.parse(&self.buf[..self.len]) {
                 Ok(httparse::Status::Complete(_)) => {
                     if let Some(p) = req.path {
+                        let mut agent = Agent::Other;
                         let ah: Vec<api::Header> = req.headers.into_iter()
                             .filter(|h| *h != &httparse::EMPTY_HEADER)
                             .map(|h| api::Header {
                                 name: h.name.to_owned(),
                                 value: String::from_utf8(h.value.to_vec()).unwrap_or("".to_owned())
                             })
+                            .map(|h| {
+                                if h.name == "User-Agent" {
+                                    if h.value.starts_with("mpv") {
+                                        agent = Agent::MPV;
+                                    } else if h.value.starts_with("mpd") {
+                                        agent = Agent::MPD;
+                                    }
+                                }
+                                h
+                            })
                             .collect();
-                        Ok(Some((p.to_owned(), ah)))
+                        Ok(Some((p.to_owned(), agent, ah)))
                     } else {
                         Err(())
                     }
@@ -347,12 +383,13 @@ impl Incoming {
 }
 
 impl Client {
-    fn new(conn: TcpStream) -> Client {
+    fn new(conn: TcpStream, agent: Agent) -> Client {
         Client {
             conn,
             buffer: VecDeque::with_capacity(CLIENT_BUFFER_LEN),
             last_action: time::Instant::now(),
             chunker: Chunker::new(),
+            agent,
         }
     }
 
