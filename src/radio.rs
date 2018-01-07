@@ -11,6 +11,7 @@ use api::{ApiMessage, QueuePos};
 use config::Config;
 use prebuffer::PreBuffer;
 use broadcast::{Buffer, BufferData};
+use tc_queue::BufferRes;
 use amy;
 
 struct RadioConn {
@@ -18,6 +19,7 @@ struct RadioConn {
 }
 
 const SYNC_AHEAD: u64 = 1;
+const MAX_FALL_BEHIND: u64 = 1;
 
 struct Syncer {
     last_pts: f64,
@@ -54,6 +56,15 @@ impl Syncer {
         }
     }
 
+    fn should_skip(&mut self) -> bool {
+        if let Some(dur) = (time::Instant::now() - self.start)
+            .checked_sub(time::Duration::from_millis(((self.last_pts - self.init_pts.unwrap_or(0.)) * 1000.) as u64)) {
+            dur > time::Duration::from_secs(MAX_FALL_BEHIND)
+        } else {
+            false
+        }
+    }
+
     fn sync(&mut self) {
         if let Some(dur) = time::Duration::from_millis(((self.last_pts - self.init_pts.unwrap_or(0.)) * 1000.) as u64)
             .checked_sub(time::Duration::from_secs(SYNC_AHEAD) + (time::Instant::now() - self.start)) {
@@ -87,19 +98,28 @@ pub fn play(buffer_rec: Receiver<PreBuffer>, mid: usize, btx: amy::Sender<Buffer
     let mut syncer = Syncer::new();
     loop {
         match pb.buffer.next_buf() {
-            Some(BufferData::Frame { data, pts } ) => {
+            BufferRes::Data(BufferData::Frame { data, pts } ) => {
                 syncer.update(pts);
                 btx.send(Buffer::new(mid, BufferData::Frame { data, pts })).unwrap();
                 syncer.sync();
             }
-            Some(b @ BufferData::Header(_) ) => {
+            BufferRes::Data(b @ BufferData::Header(_) ) => {
                 syncer.new_song();
                 btx.send(Buffer::new(mid, b)).unwrap();
             }
-            Some(b @ BufferData::Trailer(_) ) => {
+            BufferRes::Data(b @ BufferData::Trailer(_) ) => {
                 btx.send(Buffer::new(mid, b)).unwrap();
             }
-            None => {
+            BufferRes::Timeout => {
+                if syncer.should_skip() {
+                    debug!(log, "Buffer recv timeout, skipping!");
+                    pb.buffer.done.store(true, Ordering::Release);
+                    pb = buffer_rec.recv().unwrap();
+                    syncer.done();
+                    debug!(log, "Received next buffer, moving on!");
+                }
+            }
+            BufferRes::Done => {
                 pb.buffer.done.store(true, Ordering::Release);
                 debug!(log, "Buffer drained, waiting for next!");
                 pb = buffer_rec.recv().unwrap();

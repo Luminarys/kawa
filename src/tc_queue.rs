@@ -1,5 +1,5 @@
 use std::sync::{atomic, mpsc, Arc};
-use std::{thread, mem, io, time};
+use std::{mem, io, time};
 
 use kaeru::Sink;
 use broadcast::BufferData;
@@ -15,6 +15,12 @@ pub struct QW {
 pub struct QR {
     pub done: Arc<atomic::AtomicBool>,
     queue: mpsc::Receiver<BufferData>,
+}
+
+pub enum BufferRes {
+    Data(BufferData),
+    Timeout,
+    Done,
 }
 
 pub fn new() -> (QW, QR) {
@@ -101,17 +107,11 @@ impl Drop for QW {
 }
 
 impl QR {
-    pub fn next_buf(&self) -> Option<BufferData> {
-        loop {
-            match self.queue.try_recv() {
-                Ok(b) => return Some(b),
-                Err(mpsc::TryRecvError::Empty) => {
-                    thread::sleep(time::Duration::from_millis(10));
-                }
-                Err(mpsc::TryRecvError::Disconnected) => {
-                    return None;
-                }
-            }
+    pub fn next_buf(&self) -> BufferRes {
+        match self.queue.recv_timeout(time::Duration::from_millis(10)) {
+            Ok(b) => BufferRes::Data(b),
+            Err(mpsc::RecvTimeoutError::Timeout) => BufferRes::Timeout,
+            Err(mpsc::RecvTimeoutError::Disconnected) => BufferRes::Done,
         }
     }
 }
