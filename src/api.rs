@@ -6,7 +6,7 @@ use std::path::Path;
 use serde_json as serde;
 use rouille;
 
-use queue::{Queue, QueueEntry};
+use queue::{Queue, NewQueueEntry};
 use config::ApiConfig;
 
 pub type Listeners = Arc<Mutex<HashMap<usize, Listener>>>;
@@ -29,7 +29,7 @@ pub enum QueuePos {
 pub enum ApiMessage {
     Skip,
     Remove(QueuePos),
-    Insert(QueuePos, QueueEntry),
+    Insert(QueuePos, NewQueueEntry),
     Clear,
 }
 
@@ -81,7 +81,7 @@ impl Server {
                 },
 
                 (POST) (/queue/head) => {
-                    match serde::from_reader(req.data().unwrap()).map(|d| QueueEntry::deserialize(d)) {
+                    match serde::from_reader(req.data().unwrap()).map(|d| NewQueueEntry::deserialize(d)) {
                         Ok(Some(qe)) => {
                             debug!("Handling queue head insert");
                             if Path::new(&qe.path).exists() {
@@ -121,7 +121,7 @@ impl Server {
 
                 (POST) (/queue/tail) => {
                     debug!("Handling queue tail insert");
-                    match serde::from_reader(req.data().unwrap()).map(|d| QueueEntry::deserialize(d)) {
+                    match serde::from_reader(req.data().unwrap()).map(|d| NewQueueEntry::deserialize(d)) {
                         Ok(Some(qe)) => {
                             debug!("Handling queue head insert");
                             if Path::new(&qe.path).exists() {
