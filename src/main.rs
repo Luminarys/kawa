@@ -3,9 +3,8 @@
 extern crate alloc_system;
 
 #[macro_use]
-extern crate slog;
-extern crate slog_term;
-extern crate slog_async;
+extern crate log;
+extern crate env_logger;
 extern crate toml;
 extern crate serde;
 extern crate serde_json;
@@ -33,52 +32,48 @@ use std::env;
 use std::sync::{Arc, Mutex, mpsc};
 use std::io::{Read};
 use std::collections::HashMap;
-use slog::Drain;
 
 fn main() {
-    let decorator = slog_term::TermDecorator::new().stderr().build();
-    let drain = slog_term::FullFormat::new(decorator).build().fuse();
-    let drain = slog_async::Async::new(drain).build().fuse();
-    let root_log = slog::Logger::root(drain, o!());
+    // Wow this is dumb
+    if std::env::var("RUST_LOG").is_err() {
+        std::env::set_var("RUST_LOG", "info");
+    }
+    env_logger::init();
 
     #[cfg(feature = "nightly")]
-    info!(root_log, "Using system alloc");
+    info!("Using system alloc");
 
-    info!(root_log, "Initializing ffmpeg");
+    info!("Initializing ffmpeg");
     kaeru::init();
 
     let path = env::args().nth(1).unwrap_or("config.toml".to_owned());
     let mut s = String::new();
     if let Ok(mut f) = std::fs::File::open(&path) {
         if f.read_to_string(&mut s).is_err() {
-            crit!(root_log, "Config file could not be read!");
+            error!("Config file could not be read!");
             return;
         }
     } else {
-        crit!(root_log, "A config file path must be passed as argv[1] or must exist as ./config.toml");
+        error!("A config file path must be passed as argv[1] or must exist as ./config.toml");
         return;
     }
 
-    info!(root_log, "Initializing config");
+    info!("Initializing config");
     let config = match config::parse_config(&s) {
         Ok(c) => c,
         Err(e) => {
-            crit!(root_log, "Failed to parse config: {}", e);
+            error!("Failed to parse config: {}", e);
             return;
         }
     };
 
-    let api_log = root_log.new(o!("thread" => "api"));
-    let queue_log = root_log.new(o!("queue" => ()));
-    let radio_log = root_log.new(o!("thread" => "radio"));
-
-    info!(root_log, "Starting");
-    let queue = Arc::new(Mutex::new(queue::Queue::new(config.clone(), queue_log)));
+    info!("Starting");
+    let queue = Arc::new(Mutex::new(queue::Queue::new(config.clone())));
     let listeners = Arc::new(Mutex::new(HashMap::new()));
     let (tx, rx) = mpsc::channel();
-    let btx = broadcast::start(&config, listeners.clone(), root_log.new(o!("thread" => "broadcast")));
-    api::start_api(config.api.clone(), queue.clone(), listeners, tx, api_log);
-    radio::start_streams(config.clone(), queue, rx, btx, radio_log);
+    let btx = broadcast::start(&config, listeners.clone());
+    api::start_api(config.api.clone(), queue.clone(), listeners, tx);
+    radio::start_streams(config.clone(), queue, rx, btx);
 }
 
 #[cfg(test)]

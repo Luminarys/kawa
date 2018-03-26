@@ -3,7 +3,6 @@ use std::sync::atomic::Ordering;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::{thread, time};
 
-use slog::Logger;
 use reqwest;
 
 use queue::{Queue, QueueEntry};
@@ -74,13 +73,14 @@ impl Syncer {
 }
 
 impl RadioConn {
-    fn new(mid: usize,
-           btx: amy::Sender<Buffer>,
-           log: Logger) -> RadioConn {
+    fn new(
+        mid: usize,
+        btx: amy::Sender<Buffer>,
+    ) -> RadioConn {
         let (tx, rx) = mpsc::channel();
 
         thread::spawn(move || {
-            play(rx, mid, btx, log);
+            play(rx, mid, btx);
         });
         RadioConn {
             tx: tx,
@@ -92,8 +92,8 @@ impl RadioConn {
     }
 }
 
-pub fn play(buffer_rec: Receiver<PreBuffer>, mid: usize, btx: amy::Sender<Buffer>, log: Logger) {
-    debug!(log, "Awaiting initial buffer");
+pub fn play(buffer_rec: Receiver<PreBuffer>, mid: usize, btx: amy::Sender<Buffer>) {
+    debug!("Awaiting initial buffer");
     let mut pb = buffer_rec.recv().unwrap();
     let mut syncer = Syncer::new();
     loop {
@@ -112,20 +112,20 @@ pub fn play(buffer_rec: Receiver<PreBuffer>, mid: usize, btx: amy::Sender<Buffer
             }
             BufferRes::Timeout => {
                 if syncer.should_skip() {
-                    debug!(log, "Buffer recv timeout, skipping!");
+                    debug!("Buffer recv timeout, skipping!");
                     pb.buffer.done.store(true, Ordering::Release);
                     pb = buffer_rec.recv().unwrap();
                     syncer.done();
-                    debug!(log, "Received next buffer, moving on!");
+                    debug!("Received next buffer, moving on!");
                 }
             }
             BufferRes::Done => {
                 pb.buffer.done.store(true, Ordering::Release);
-                debug!(log, "Buffer drained, waiting for next!");
+                debug!("Buffer drained, waiting for next!");
                 pb = buffer_rec.recv().unwrap();
-                debug!(log, "Received next buffer, syncing for remaining time!");
+                debug!("Received next buffer, syncing for remaining time!");
                 syncer.done();
-                debug!(log, "Sync complete, resuming!");
+                debug!("Sync complete, resuming!");
             }
         }
     }
@@ -135,21 +135,20 @@ pub fn start_streams(cfg: Config,
                      queue: Arc<Mutex<Queue>>,
                      updates: Receiver<ApiMessage>,
                      btx: amy::Sender<Buffer>,
-                     log: Logger,) {
+                     ) {
     let mut rconns: Vec<_> = cfg.streams.iter().enumerate()
-        .map(|(id, stream)| {
-            let rlog = log.new(o!("mount" => stream.mount.clone()));
+        .map(|(id, _)| {
             RadioConn::new(id,
                              btx.try_clone().unwrap(),
-                             rlog)
+                             )
         })
         .collect();
 
     loop {
-        debug!(log, "Extracting next buffer");
+        debug!("Extracting next buffer");
         let prebuffers = queue.lock().unwrap().get_next_tc();
 
-        debug!(log, "Dispatching new buffers");
+        debug!("Dispatching new buffers");
         // The order is guarenteed to be correct because we always iterate by the config
         // ordering.
         let tokens: Vec<_> = rconns.iter_mut().zip(prebuffers.into_iter())
@@ -159,14 +158,14 @@ pub fn start_streams(cfg: Config,
                 tok
             }).collect();
 
-        debug!(log, "Broadcasting np");
+        debug!("Broadcasting np");
         let np = queue.lock().unwrap().np().entry().clone();
         if let Err(e) = broadcast_np(&cfg.queue.np, np) {
-            warn!(log, "Failed to broadcast np: {}", e);
+            warn!("Failed to broadcast np: {}", e);
         }
 
         queue.lock().unwrap().start_next_tc();
-        debug!(log, "Entering main loop");
+        debug!("Entering main loop");
 
         // Song activity loop - ensures that the song is properly transcoding and handles any sort
         // of API message that gets received in the meanwhile
@@ -179,7 +178,7 @@ pub fn start_streams(cfg: Config,
                 if let Ok(msg) = updates.try_recv() {
                     // Keep all these operations local just incase
                     // anything complex might need to happen in the future.
-                    debug!(log, "Received API message {:?}", msg);
+                    debug!("Received API message {:?}", msg);
                     match msg {
                         ApiMessage::Skip => {
                             for token in tokens {

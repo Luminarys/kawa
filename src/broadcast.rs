@@ -5,7 +5,6 @@ use std::io::{self, Read, Write};
 
 use {amy, httparse};
 use url::Url;
-use slog::Logger;
 
 use api;
 use config::{Config, StreamConfig, Container};
@@ -37,7 +36,6 @@ pub struct Broadcaster {
     lid: usize,
     tid: usize,
     name: String,
-    log: Logger,
 }
 
 #[derive(Clone, Debug)]
@@ -95,14 +93,14 @@ enum WR {
     Err,
 }
 
-pub fn start(cfg: &Config, listeners: api::Listeners, log: Logger) -> amy::Sender<Buffer> {
-    let (mut b, tx) = Broadcaster::new(cfg, listeners, log).unwrap();
+pub fn start(cfg: &Config, listeners: api::Listeners) -> amy::Sender<Buffer> {
+    let (mut b, tx) = Broadcaster::new(cfg, listeners).unwrap();
     thread::spawn(move || b.run());
     tx
 }
 
 impl Broadcaster {
-    pub fn new(cfg: &Config, listeners: api::Listeners, log: Logger) -> io::Result<(Broadcaster, amy::Sender<Buffer>)> {
+    pub fn new(cfg: &Config, listeners: api::Listeners) -> io::Result<(Broadcaster, amy::Sender<Buffer>)> {
         let poll = amy::Poller::new()?;
         let mut reg = poll.get_registrar()?;
         let listener = TcpListener::bind((Ipv4Addr::new(0, 0, 0, 0), cfg.radio.port))?;
@@ -128,12 +126,11 @@ impl Broadcaster {
             lid,
             tid,
             name: cfg.radio.name.clone(),
-            log,
         }, tx))
     }
 
     pub fn run(&mut self) {
-        debug!(self.log, "starting broadcaster");
+        debug!("starting broadcaster");
         loop {
             for n in self.poll.wait(15).unwrap() {
                 if n.id == self.lid {
@@ -147,7 +144,7 @@ impl Broadcaster {
                 } else if self.clients.contains_key(&n.id) {
                     self.process_client(n.id);
                 } else {
-                    warn!(self.log, "Received amy event for bad id: {}", n.id);
+                    warn!("Received amy event for bad id: {}", n.id);
                 }
             }
         }
@@ -179,7 +176,7 @@ impl Broadcaster {
         loop {
             match self.listener.accept() {
                 Ok((conn, ip)) => {
-                    debug!(self.log, "Accepted new connection from {:?}!", ip);
+                    debug!("Accepted new connection from {:?}!", ip);
                     let pid = self.reg.register(&conn, amy::Event::Read).unwrap();
                     self.incoming.insert(pid, Incoming::new(conn));
                 }
@@ -238,7 +235,7 @@ impl Broadcaster {
                 let inc = self.incoming.remove(&id).unwrap();
                 for (mid, stream) in self.streams.iter().enumerate() {
                     if mount.ends_with(&stream.config.mount) {
-                        debug!(self.log, "Adding a client to stream {}", stream.config.mount);
+                        debug!("Adding a client to stream {}", stream.config.mount);
                         // Swap to write only mode
                         self.reg.reregister(id, &inc.conn, amy::Event::Write).unwrap();
                         let mut client = Client::new(inc.conn, agent);
@@ -262,12 +259,12 @@ impl Broadcaster {
                                 headers,
                             });
                         } else {
-                            debug!(self.log, "Failed to write data to client");
+                            debug!("Failed to write data to client");
                         }
                         return;
                     }
                 }
-                debug!(self.log, "Client specified unknown path: {}", mount);
+                debug!("Client specified unknown path: {}", mount);
             }
             Ok(None) => { },
             Err(()) => self.remove_incoming(&id),

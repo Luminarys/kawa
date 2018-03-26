@@ -4,7 +4,6 @@ use std::collections::HashMap;
 use std::thread;
 use std::path::Path;
 use serde_json as serde;
-use slog::Logger;
 use rouille;
 
 use queue::{Queue, QueueEntry};
@@ -18,7 +17,6 @@ struct Server {
     queue: SQueue,
     listeners: Listeners,
     chan: ApiChan,
-    log: Logger,
 }
 
 #[derive(Debug)]
@@ -59,7 +57,7 @@ impl Server {
     fn handle_request(&self, req: &rouille::Request) -> rouille::Response {
         router!(req,
                 (GET) (/np) => {
-                    debug!(self.log, "Handling now playing req");
+                    debug!("Handling now playing req");
                     let q = self.queue.lock().unwrap();
                     rouille::Response::from_data(
                         "application/json",
@@ -67,7 +65,7 @@ impl Server {
                 },
 
                 (GET) (/listeners) => {
-                    debug!(self.log, "Handling listeners req");
+                    debug!("Handling listeners req");
                     let l = self.listeners.lock().unwrap();
                     rouille::Response::from_data(
                         "application/json",
@@ -75,7 +73,7 @@ impl Server {
                 },
 
                 (GET) (/queue) => {
-                    debug!(self.log, "Handling queue disp req");
+                    debug!("Handling queue disp req");
                     let q = self.queue.lock().unwrap();
                     rouille::Response::from_data(
                         "application/json",
@@ -85,7 +83,7 @@ impl Server {
                 (POST) (/queue/head) => {
                     match serde::from_reader(req.data().unwrap()).map(|d| QueueEntry::deserialize(d)) {
                         Ok(Some(qe)) => {
-                            debug!(self.log, "Handling queue head insert");
+                            debug!("Handling queue head insert");
                             if Path::new(&qe.path).exists() {
                                 self.chan.lock().unwrap().send(ApiMessage::Insert(QueuePos::Head, qe)).unwrap();
                                 rouille::Response::from_data(
@@ -114,7 +112,7 @@ impl Server {
                 },
 
                 (DELETE) (/queue/head) => {
-                    debug!(self.log, "Handling queue head remove");
+                    debug!("Handling queue head remove");
                     self.chan.lock().unwrap().send(ApiMessage::Remove(QueuePos::Head)).unwrap();
                     rouille::Response::from_data(
                         "application/json",
@@ -122,10 +120,10 @@ impl Server {
                 },
 
                 (POST) (/queue/tail) => {
-                    debug!(self.log, "Handling queue tail insert");
+                    debug!("Handling queue tail insert");
                     match serde::from_reader(req.data().unwrap()).map(|d| QueueEntry::deserialize(d)) {
                         Ok(Some(qe)) => {
-                            debug!(self.log, "Handling queue head insert");
+                            debug!("Handling queue head insert");
                             if Path::new(&qe.path).exists() {
                                 self.chan.lock().unwrap().send(ApiMessage::Insert(QueuePos::Tail, qe)).unwrap();
                                 rouille::Response::from_data(
@@ -154,7 +152,7 @@ impl Server {
                 },
 
                 (DELETE) (/queue/tail) => {
-                    debug!(self.log, "Handling queue tail remove");
+                    debug!("Handling queue tail remove");
                     self.chan.lock().unwrap().send(ApiMessage::Remove(QueuePos::Tail)).unwrap();
                     rouille::Response::from_data(
                         "application/json",
@@ -162,7 +160,7 @@ impl Server {
                 },
 
                 (POST) (/skip) => {
-                    debug!(self.log, "Handling queue skip");
+                    debug!("Handling queue skip");
                     self.chan.lock().unwrap().send(ApiMessage::Skip).unwrap();
                     rouille::Response::from_data(
                         "application/json",
@@ -170,7 +168,7 @@ impl Server {
                 },
 
                 (POST) (/queue/clear) => {
-                    debug!(self.log, "Handling queue clear");
+                    debug!("Handling queue clear");
                     self.chan.lock().unwrap().send(ApiMessage::Clear).unwrap();
                     rouille::Response::from_data(
                         "application/json",
@@ -200,15 +198,14 @@ impl Resp {
 }
 
 
-pub fn start_api(config: ApiConfig, queue: Arc<Mutex<Queue>>, listeners: Listeners, updates: Sender<ApiMessage>, log: Logger) {
+pub fn start_api(config: ApiConfig, queue: Arc<Mutex<Queue>>, listeners: Listeners, updates: Sender<ApiMessage>) {
     thread::spawn(move || {
-        info!(log, "Starting API");
+        info!("Starting API");
         let chan = Arc::new(Mutex::new(updates));
         let serv = Server {
             queue: queue,
             chan: chan,
             listeners,
-            log: log,
         };
         rouille::start_server(("127.0.0.1", config.port), move |request| {
             serv.handle_request(request)

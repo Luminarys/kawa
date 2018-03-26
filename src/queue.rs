@@ -4,7 +4,6 @@ use std::collections::VecDeque;
 use config::{Config, Container};
 use reqwest;
 use prebuffer::PreBuffer;
-use slog::Logger;
 use serde_json as serde;
 use serde_json::Map;
 use serde_json::Value as JSON;
@@ -20,7 +19,6 @@ pub struct Queue {
     np: QueueBuffer,
     counter: usize,
     cfg: Config,
-    log: Logger,
 }
 
 #[derive(Clone, Debug, Deserialize, Default, Serialize, PartialEq)]
@@ -36,13 +34,12 @@ pub struct QueueBuffer {
 }
 
 impl Queue {
-    pub fn new(cfg: Config, log: Logger) -> Queue {
+    pub fn new(cfg: Config) -> Queue {
         let mut q = Queue {
             np: Default::default(),
             next: Default::default(),
             entries: VecDeque::new(),
             cfg: cfg,
-            log: log,
             counter: 0,
         };
         q.start_next_tc();
@@ -58,7 +55,7 @@ impl Queue {
     }
 
     pub fn push(&mut self, qe: QueueEntry) {
-        debug!(self.log, "Inserting {:?} into queue tail!", qe);
+        debug!("Inserting {:?} into queue tail!", qe);
         self.entries.push_back(qe);
         if self.entries.len() == 1 {
             self.start_next_tc();
@@ -66,14 +63,14 @@ impl Queue {
     }
 
     pub fn push_head(&mut self, qe: QueueEntry) {
-        debug!(self.log, "Inserting {:?} into queue head!", qe);
+        debug!("Inserting {:?} into queue head!", qe);
         self.entries.push_front(qe);
         self.start_next_tc();
     }
 
     pub fn pop(&mut self) {
         let entry = self.entries.pop_back();
-        debug!(self.log, "Removing {:?} from queue tail!", entry);
+        debug!("Removing {:?} from queue tail!", entry);
         if self.entries.is_empty() {
             self.start_next_tc();
         }
@@ -81,12 +78,12 @@ impl Queue {
 
     pub fn pop_head(&mut self) {
         let res = self.entries.pop_front();
-        debug!(self.log, "Removing {:?} from queue head!", res);
+        debug!("Removing {:?} from queue head!", res);
         self.start_next_tc();
     }
 
     pub fn clear(&mut self) {
-        debug!(self.log, "Clearing queue!");
+        debug!("Clearing queue!");
         if !self.entries.is_empty() {
             self.entries.clear();
             self.start_next_tc();
@@ -94,7 +91,7 @@ impl Queue {
     }
 
     pub fn get_next_tc(&mut self) -> Vec<PreBuffer> {
-        debug!(self.log, "Extracting current pre-transcode!");
+        debug!("Extracting current pre-transcode!");
         // Swap next into np, then clear next and extract np buffers
         mem::swap(&mut self.next, &mut self.np);
         self.next = Default::default();
@@ -106,7 +103,7 @@ impl Queue {
     }
 
     pub fn start_next_tc(&mut self) {
-        debug!(self.log, "Beginning next pre-transcode!");
+        debug!("Beginning next pre-transcode!");
         let mut tries = 0;
         loop {
             if tries == 5 {
@@ -117,7 +114,7 @@ impl Queue {
                 };
                 // TODO: Make this less retarded - Rust can't deal with two levels of dereference
                 let ct = &self.cfg.queue.fallback.1.clone();
-                warn!(self.log, "Using fallback");
+                warn!("Using fallback");
                 let tc = self.initiate_transcode(buf, ct).unwrap();
                 self.next = QueueBuffer {
                     bufs: tc,
@@ -139,13 +136,13 @@ impl Queue {
                                 return;
                             },
                             Err(e) => {
-                                warn!(self.log, "Failed to start transcode: {}", e);
+                                warn!("Failed to start transcode: {}", e);
                                 continue;
                             }
                         }
                     }
                     Err(e) => {
-                        warn!(self.log, "Failed to open queue entry {:?}: {}", qe, e);
+                        warn!("Failed to open queue entry {:?}: {}", qe, e);
                         continue;
                     }
                 }
@@ -160,7 +157,7 @@ impl Queue {
     fn next_queue_buffer(&mut self) -> Option<QueueEntry> {
         let e = self.entries.front().cloned();
         if let Some(ref er) = e {
-            info!(self.log, "Using queue entry {:?}", er);
+            info!("Using queue entry {:?}", er);
         }
         e
     }
@@ -173,7 +170,7 @@ impl Queue {
             .and_then(|_| serde::from_str(&body).ok())
             .and_then(|v| QueueEntry::deserialize(v));
         if res.is_some() {
-            info!(self.log, "Using random entry {:?}", res.as_ref().unwrap());
+            info!("Using random entry {:?}", res.as_ref().unwrap());
         }
         res
     }
@@ -192,18 +189,16 @@ impl Queue {
             };
             let output = kaeru::Output::new(tx, ct, s.codec, s.bitrate)?;
             gb.add_output(output)?;
-            let log = self.log.new(o!("Transcoder, mount" => s.mount.clone(), "QID" => self.counter));
-            prebufs.push(PreBuffer::new(rx, metadata.clone(), log));
+            prebufs.push(PreBuffer::new(rx, metadata.clone()));
         }
         let g = gb.build()?;
-        let log = self.log.new(o!("QID" => self.counter, "thread" => "transcoder"));
         thread::spawn(move || {
-            debug!(log, "Starting");
+            debug!("Starting transcode");
             match g.run() {
                 Ok(()) => { }
-                Err(e) => { debug!(log, "completed with err: {}", e) }
+                Err(e) => { debug!("transcode completed with err: {}", e) }
             }
-            debug!(log, "Completed");
+            debug!("Completed transcode");
         });
         self.counter += 1;
         Ok(prebufs)
