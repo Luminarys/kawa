@@ -17,12 +17,20 @@ pub struct Queue {
     entries: VecDeque<QueueEntry>,
     next: QueueBuffer,
     np: QueueBuffer,
-    counter: usize,
+    counter: u64,
+    last_id: u64,
     cfg: Config,
 }
 
-#[derive(Clone, Debug, Deserialize, Default, Serialize, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Default, PartialEq)]
+pub struct NewQueueEntry {
+    pub data: Map<String, JSON>,
+    pub path: String,
+}
+
+#[derive(Clone, Debug, Default, Serialize, PartialEq)]
 pub struct QueueEntry {
+    pub id: u64,
     pub data: Map<String, JSON>,
     pub path: String,
 }
@@ -41,6 +49,7 @@ impl Queue {
             entries: VecDeque::new(),
             cfg: cfg,
             counter: 0,
+            last_id: 0,
         };
         q.start_next_tc();
         q
@@ -54,16 +63,18 @@ impl Queue {
         &self.entries
     }
 
-    pub fn push(&mut self, qe: QueueEntry) {
-        debug!("Inserting {:?} into queue tail!", qe);
+    pub fn push(&mut self, nqe: NewQueueEntry) {
+        debug!("Inserting {:?} into queue tail!", nqe);
+        let qe = self.queue_entry_from_new(nqe);
         self.entries.push_back(qe);
         if self.entries.len() == 1 {
             self.start_next_tc();
         }
     }
 
-    pub fn push_head(&mut self, qe: QueueEntry) {
-        debug!("Inserting {:?} into queue head!", qe);
+    pub fn push_head(&mut self, nqe: NewQueueEntry) {
+        debug!("Inserting {:?} into queue head!", nqe);
+        let qe = self.queue_entry_from_new(nqe);
         self.entries.push_front(qe);
         self.start_next_tc();
     }
@@ -118,7 +129,7 @@ impl Queue {
                 let tc = self.initiate_transcode(buf, ct).unwrap();
                 self.next = QueueBuffer {
                     bufs: tc,
-                    entry: QueueEntry { data: Map::new(), path: "fallback".to_owned() },
+                    entry: self.queue_entry_from_new(NewQueueEntry { data: Map::new(), path: "fallback".to_owned() }),
                 };
                 return;
             }
@@ -168,7 +179,8 @@ impl Queue {
             .ok()
             .and_then(|mut r| r.read_to_string(&mut body).ok())
             .and_then(|_| serde::from_str(&body).ok())
-            .and_then(|v| QueueEntry::deserialize(v));
+            .and_then(|v| NewQueueEntry::deserialize(v))
+            .map(|v| self.queue_entry_from_new(v));
         if res.is_some() {
             info!("Using random entry {:?}", res.as_ref().unwrap());
         }
@@ -203,21 +215,28 @@ impl Queue {
         self.counter += 1;
         Ok(prebufs)
     }
+
+    fn queue_entry_from_new(&mut self, nqe: NewQueueEntry) -> QueueEntry {
+        self.last_id += 1;
+        QueueEntry { id: self.last_id, data: nqe.data, path: nqe.path }
+    }
 }
 
-impl QueueEntry {
-    pub fn deserialize(json: JSON) -> Option<QueueEntry> {
+impl NewQueueEntry {
+    pub fn deserialize(json: JSON) -> Option<NewQueueEntry> {
         match json {
             JSON::Object(o) => {
                 match o.get("path").cloned() {
-                    Some(JSON::String(p)) => Some(QueueEntry { data: o, path: p }),
+                    Some(JSON::String(p)) => Some(NewQueueEntry { data: o, path: p }),
                     _ => None,
                 }
             }
             _ => None
         }
     }
+}
 
+impl QueueEntry {
     pub fn serialize(&self) -> JSON {
         JSON::Object(self.data.clone())
     }
