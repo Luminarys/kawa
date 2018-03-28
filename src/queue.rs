@@ -238,7 +238,9 @@ impl NewQueueEntry {
 
 impl QueueEntry {
     pub fn serialize(&self) -> JSON {
-        JSON::Object(self.data.clone())
+        let mut obj = self.data.clone();
+        obj.insert("queue_id".to_string(), JSON::Number(self.id.into()));
+        JSON::Object(obj)
     }
 }
 

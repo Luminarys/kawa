@@ -80,7 +80,8 @@ Inserts a track at the top of the queue.
 
 Note: track blob is an arbitrary JSON blob that Kawa will hold on to for you. At
 a minimum it must include "path", the path to the audio source on the
-filesystem.
+filesystem. Additionally, a unique "queue_id" field will be added whenever
+the blob is retrieved and can be used for manipulation of the queue.
 
 **Response**
 
