@@ -115,9 +115,10 @@ mod tests {
 
         let o1 = Output::new_writer(Dum(0), "mp3", kaeru::AVCodecID::AV_CODEC_ID_MP3, Some(192))?;
         let o2 = Output::new_writer(Dum(0), "ogg", kaeru::AVCodecID::AV_CODEC_ID_OPUS, Some(192))?;
-        let o3 = Output::new_writer(Dum(0), "ogg", kaeru::AVCodecID::AV_CODEC_ID_FLAC, None)?;
+        let o3 = Output::new_writer(Dum(0), "adts", kaeru::AVCodecID::AV_CODEC_ID_AAC, Some(192))?;
+        let o4 = Output::new_writer(Dum(0), "ogg", kaeru::AVCodecID::AV_CODEC_ID_FLAC, None)?;
         let mut gb = GraphBuilder::new(i)?;
-        gb.add_output(o1)?.add_output(o2)?.add_output(o3)?;
+        gb.add_output(o1)?.add_output(o2)?.add_output(o3)?.add_output(o4)?;
         let g = gb.build()?;
         let gt = thread::spawn(move || g.run().unwrap());
         gt.join();

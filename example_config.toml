@@ -36,8 +36,8 @@ name="my radio"
 # following properties are available:
 #
 # mount: the HTTP address to serve the stream from
-# container: the container format to use (ogg, flac, or mp3)
-# codec: the audio codec to use (opus, vorbis, flac, do not specify for mp3 streams)
+# container: the container format to use (ogg, flac, aac, or mp3)
+# codec: the audio codec to use (opus, vorbis, flac, aac, do not specify for mp3 streams)
 # bitrate: the desired bitrate of the stream in Kb/s, if not specified an appropriate
 # bitrate will be automatically selected based on the container/codec
 [[streams]]
@@ -49,6 +49,11 @@ bitrate=128
 mount="stream192.mp3"
 container="mp3"
 bitrate=192
+
+[[streams]]
+mount="stream128.aac"
+container="aac"
+bitrate=128
 
 [[streams]]
 mount="stream128.opus"

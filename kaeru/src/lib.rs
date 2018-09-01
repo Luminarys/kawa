@@ -252,6 +252,8 @@ impl GraphBuilder {
             if (*output.codec_ctx).codec_id == sys::AVCodecID::AV_CODEC_ID_OPUS {
                 // OPUS only supports 48kHz sample rates
                 (*output.codec_ctx).sample_rate = 48000;
+            } else if (*output.codec_ctx).codec_id == sys::AVCodecID::AV_CODEC_ID_AAC {
+                (*output.codec_ctx).sample_rate = 48000;
             } else if (*output.codec_ctx).codec_id == sys::AVCodecID::AV_CODEC_ID_MP3 {
                 // MP3 can't handle 192 kHz, so encode at 44.1
                 (*output.codec_ctx).sample_rate = 44100;
@@ -797,17 +799,20 @@ mod tests {
         let fout2 = File::create("test/test2.ogg").unwrap();
         let fout3 = File::create("test/test3.ogg").unwrap();
         let fout4 = File::create("test/test4.mp3").unwrap();
+        let fout5 = File::create("test/test5.aac").unwrap();
 
         let i = Input::new(fin, "mp3")?;
         let o1 = Output::new_writer(fout1, "ogg", super::AVCodecID::AV_CODEC_ID_OPUS, None)?;
         let o2 = Output::new_writer(fout2, "ogg", super::AVCodecID::AV_CODEC_ID_VORBIS, None)?;
         let o3 = Output::new_writer(fout3, "ogg", super::AVCodecID::AV_CODEC_ID_FLAC, None)?;
         let o4 = Output::new_writer(fout4, "mp3", super::AVCodecID::AV_CODEC_ID_MP3, None)?;
+        let o4 = Output::new_writer(fout5, "adts", super::AVCodecID::AV_CODEC_ID_AAC, None)?;
         let mut gb = GraphBuilder::new(i)?;
         gb.add_output(o1)?;
         gb.add_output(o2)?;
         gb.add_output(o3)?;
         gb.add_output(o4)?;
+        gb.add_output(o5)?;
         gb.build()?.run()
     }
 

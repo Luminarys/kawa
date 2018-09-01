@@ -398,6 +398,8 @@ impl Client {
                 "audio/mpeg"
             } else if let Container::FLAC = config.container {
                 "audio/flac"
+            } else if let Container::AAC = config.container {
+                "audio/aac"
             } else {
                 "audio/ogg"
             }),
