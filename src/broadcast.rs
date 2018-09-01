@@ -396,13 +396,24 @@ impl Client {
             format!("Server: {}/{}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION")),
             format!("Content-Type: {}", if let Container::MP3 = config.container {
                 "audio/mpeg"
+            } else if let Container::FLAC = config.container {
+                "audio/flac"
             } else {
-                "application/ogg"
+                "audio/ogg"
             }),
             format!("Transfer-Encoding: chunked"),
             format!("Connection: keep-alive"),
             format!("Cache-Control: no-cache"),
             format!("x-audiocast-name: {}", name),
+            match config.bitrate {
+		Some(bitrate) => format!("x-audiocast-bitrate: {}", bitrate),
+		None => format!("x-audiocast-bitrate: 0"),
+	    },
+            format!("icy-name: {}", name),
+            match config.bitrate {
+                Some(bitrate) => format!("icy-br: {}", bitrate),
+                None => format!("icy-br: 0"),
+            },
         ];
         let data = lines.join("\r\n") + "\r\n\r\n";
         match self.conn.write(data.as_bytes()) {
