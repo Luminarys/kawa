@@ -347,7 +347,7 @@ impl Incoming {
                                 if h.name == "User-Agent" {
                                     if h.value.starts_with("mpv") {
                                         agent = Agent::MPV;
-                                    } else if h.value.starts_with("mpd") {
+                                    } else if h.value.starts_with("mpd") || h.value.starts_with("Music Player Daemon") {
                                         agent = Agent::MPD;
                                     }
                                 }
