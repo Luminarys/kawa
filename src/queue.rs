@@ -197,6 +197,7 @@ impl Queue {
             let ct = match s.container {
                 Container::Ogg => "ogg",
                 Container::MP3 => "mp3",
+                Container::AAC => "adts",
                 Container::FLAC => "flac",
             };
             let output = kaeru::Output::new(tx, ct, s.codec, s.bitrate)?;

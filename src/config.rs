@@ -45,6 +45,7 @@ pub struct QueueConfig {
 pub enum Container {
     Ogg,
     MP3,
+    AAC,
     FLAC,
 }
 
@@ -84,8 +85,9 @@ impl InternalConfig {
             let container = match &*s.container {
                 "ogg" => Container::Ogg,
                 "mp3" => Container::MP3,
+                "aac" => Container::AAC,
                 "flac" => Container::FLAC,
-                _ => return Err(format!("Currently, only ogg, mp3, and flac are supported as containers.")),
+                _ => return Err(format!("Currently, only ogg, mp3, aac, and flac are supported as containers.")),
             };
             let codec = if let Some(c) = s.codec {
                 match &*c {
@@ -93,7 +95,8 @@ impl InternalConfig {
                     "vorbis" => AVCodecID::AV_CODEC_ID_VORBIS,
                     "flac" => AVCodecID::AV_CODEC_ID_FLAC,
                     "mp3" => AVCodecID::AV_CODEC_ID_MP3,
-                    _ => return Err(format!("Currently, only opus, vorbis, flac, and mp3 are \
+                    "aac" => AVCodecID::AV_CODEC_ID_AAC,
+                    _ => return Err(format!("Currently, only opus, vorbis, flac, aac, and mp3 are \
                                             supported as codecs.")),
                 }
             } else {
@@ -101,6 +104,7 @@ impl InternalConfig {
                 match container {
                     Container::Ogg => AVCodecID::AV_CODEC_ID_OPUS,
                     Container::MP3 => AVCodecID::AV_CODEC_ID_MP3,
+                    Container::AAC => AVCodecID::AV_CODEC_ID_AAC,
                     Container::FLAC => AVCodecID::AV_CODEC_ID_FLAC,
                 }
             };
