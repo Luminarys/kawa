@@ -194,7 +194,7 @@ impl Broadcaster {
             for id in self.client_mounts[buf.mount].clone() {
                 if {
                     let client = self.clients.get_mut(&id).unwrap();
-                    if buf.data.is_data() || client.agent != Agent::MPV {
+                    if buf.data.is_data() || client.agent == Agent::MPD {
                         client.send_data(buf.data.frame())
                     } else {
                         Ok(())
