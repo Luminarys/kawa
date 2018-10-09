@@ -50,7 +50,7 @@ impl Syncer {
 
     fn done(&mut self) {
         if let Some(dur) = time::Duration::from_millis(((self.last_pts - self.init_pts.unwrap_or(0.)) * 1000.) as u64)
-            .checked_sub((time::Instant::now() - self.start)) {
+            .checked_sub(time::Instant::now() - self.start) {
             thread::sleep(dur);
         }
     }
@@ -211,9 +211,9 @@ pub fn start_streams(cfg: Config,
 }
 
 fn broadcast_np(url: &str, song: QueueEntry) -> Result<(), reqwest::Error> {
-    let client = reqwest::Client::new()?;
-    client.post(url)?
-        .json(&song.serialize())?
+    let client = reqwest::Client::new();
+    client.post(url)
+        .json(&song.serialize())
         .send()?;
     Ok(())
 }
