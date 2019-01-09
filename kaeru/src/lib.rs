@@ -24,9 +24,10 @@ error_chain! {
 }
 
 macro_rules! str_conv {
-    ($s:expr) => {
-        CString::new($s).unwrap().as_ptr()
-    }
+    ($s:expr) => {{
+        let c_string = CString::new($s).unwrap();
+        c_string.as_ptr()
+    }}
 }
 
 macro_rules! ck_null {
