@@ -290,17 +290,17 @@ impl GraphBuilder {
             ck_null!(buffersink_ctx);
 
             match sys::av_opt_set_bin(buffersink_ctx as *mut c_void, str_conv!("sample_rates\0"), mem::transmute(&(*output.codec_ctx).sample_rate),
-            mem::size_of_val(&(*output.codec_ctx).sample_rate) as c_int, sys::AV_OPT_SEARCH_CHILDREN) {
+            mem::size_of_val(&(*output.codec_ctx).sample_rate) as c_int, sys::AV_OPT_SEARCH_CHILDREN as i32) {
                 0 => { }
                 e => return Err(ErrorKind::FFmpeg("failed to configure buffersink sample_rates", e).into()),
             }
             match sys::av_opt_set_bin(buffersink_ctx as *mut c_void, str_conv!("sample_fmts\0"), mem::transmute(&(*output.codec_ctx).sample_fmt),
-            mem::size_of_val(&(*output.codec_ctx).sample_fmt) as c_int, sys::AV_OPT_SEARCH_CHILDREN) {
+            mem::size_of_val(&(*output.codec_ctx).sample_fmt) as c_int, sys::AV_OPT_SEARCH_CHILDREN as i32) {
                 0 => { }
                 e => return Err(ErrorKind::FFmpeg("failed to configure buffersink sample_fmts", e).into()),
             }
             match sys::av_opt_set_bin(buffersink_ctx as *mut c_void, str_conv!("channel_layouts\0"), mem::transmute(&(*output.codec_ctx).channel_layout),
-            mem::size_of_val(&(*output.codec_ctx).channel_layout) as c_int, sys::AV_OPT_SEARCH_CHILDREN) {
+            mem::size_of_val(&(*output.codec_ctx).channel_layout) as c_int, sys::AV_OPT_SEARCH_CHILDREN as i32) {
                 0 => { }
                 e => return Err(ErrorKind::FFmpeg("failed to configure buffersink channel_layouts", e).into()),
             }
@@ -323,7 +323,7 @@ impl GraphBuilder {
             ck_null!(asplit);
             let asplit_ctx = sys::avfilter_graph_alloc_filter(self.graph.ptr, asplit, str_conv!("splitter\0"));
             ck_null!(asplit_ctx);
-            match sys::av_opt_set_int(asplit_ctx as *mut c_void, str_conv!("outputs\0"), self.outputs.len() as i64, sys::AV_OPT_SEARCH_CHILDREN) {
+            match sys::av_opt_set_int(asplit_ctx as *mut c_void, str_conv!("outputs\0"), self.outputs.len() as i64, sys::AV_OPT_SEARCH_CHILDREN as i32) {
                 0 => { }
                 e => return Err(ErrorKind::FFmpeg("failed to configure asplit", e).into()),
             }
@@ -397,7 +397,7 @@ impl Input {
                 e => return Err(ErrorKind::FFmpeg("failed to get stream info", e).into()),
             }
             let mut codec = ptr::null_mut();
-            let stream_idx = match sys::av_find_best_stream(ctx, sys::AVMediaType::AVMEDIA_TYPE_AUDIO, -1, -1, &mut codec, 0) {
+            let stream_idx = match sys::av_find_best_stream(ctx, sys::AVMediaType_AVMEDIA_TYPE_AUDIO, -1, -1, &mut codec, 0) {
                 s if s >= 0 => s as usize,
                 e => return Err(ErrorKind::FFmpeg("failed to get audio stream from input", e).into()),
             };
@@ -546,7 +546,7 @@ impl Drop for Input {
 }
 
 impl Output {
-    pub fn new_writer<T: Write + Send + Sized>(t: T, container: &str, codec_id: sys::AVCodecID, bit_rate: Option<i64>) -> Result<Output> {
+    pub fn new_writer<T: Write + Send + Sized>(t: T, container: &str, codec_id: sys::AVCodecID::Type, bit_rate: Option<i64>) -> Result<Output> {
         struct SW<T: Write>(T);
         impl<T: Write> Write for SW<T> {
             fn write(&mut self, buf: &[u8]) -> io::Result<usize> { self.0.write(buf) }
@@ -556,7 +556,7 @@ impl Output {
         Output::new(SW(t), container, codec_id, bit_rate)
     }
 
-    pub fn new<T: Sink + Send + Sized>(t: T, container: &str, codec_id: sys::AVCodecID, bit_rate: Option<i64>) -> Result<Output> {
+    pub fn new<T: Sink + Send + Sized>(t: T, container: &str, codec_id: sys::AVCodecID::Type, bit_rate: Option<i64>) -> Result<Output> {
         unsafe {
             let buffer = sys::av_malloc(4096) as *mut u8;
             ck_null!(buffer);

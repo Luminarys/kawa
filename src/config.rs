@@ -18,7 +18,7 @@ pub struct StreamConfig {
     pub mount: String,
     pub bitrate: Option<i64>,
     pub container: Container,
-    pub codec: AVCodecID,
+    pub codec: AVCodecID::Type,
 }
 
 #[derive(Clone, Deserialize)]

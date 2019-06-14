@@ -10,5 +10,5 @@ version = "0.2"
 version = "0.10"
 
 [dependencies.ffmpeg-sys]
-version = "3.3.2"
+version = "4.1.3"
 git = "https://github.com/Luminarys/rust-ffmpeg-sys.git"
