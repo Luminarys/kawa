@@ -25,8 +25,7 @@ error_chain! {
 
 macro_rules! str_conv {
     ($s:expr) => {{
-        let c_string = CString::new($s).unwrap();
-        c_string.as_ptr()
+        $s.as_ptr() as *const i8
     }}
 }
 
@@ -218,18 +217,18 @@ impl GraphBuilder {
         unsafe {
             let graph = sys::avfilter_graph_alloc();
             ck_null!(graph);
-            let buffersrc = sys::avfilter_get_by_name(str_conv!("abuffer"));
+            let buffersrc = sys::avfilter_get_by_name(str_conv!("abuffer\0"));
             ck_null!(buffersrc);
-            let buffersrc_ctx = sys::avfilter_graph_alloc_filter(graph, buffersrc, str_conv!("in"));
+            let buffersrc_ctx = sys::avfilter_graph_alloc_filter(graph, buffersrc, str_conv!("in\0"));
             ck_null!(buffersrc_ctx);
             let time_base = (*input.stream).time_base;
             let sample_fmt = CStr::from_ptr(sys::av_get_sample_fmt_name((*input.codec_ctx).sample_fmt))
                 .to_str().chain_err(|| "failed to parse format!")?;
-            let args = format!("time_base={}/{}:sample_rate={}:sample_fmt={}:channel_layout=0x{:X}",
+            let args = format!("time_base={}/{}:sample_rate={}:sample_fmt={}:channel_layout=0x{:X}\0",
                                time_base.num, time_base.den, (*input.codec_ctx).sample_rate,
                                sample_fmt, (*input.codec_ctx).channel_layout);
 
-            match sys::avfilter_init_str(buffersrc_ctx, str_conv!(&args[..])) {
+            match sys::avfilter_init_str(buffersrc_ctx, str_conv!(args)) {
                 0 => { }
                 e => return Err(ErrorKind::FFmpeg("failed to initialize buffersrc", e).into()),
             }
@@ -246,7 +245,6 @@ impl GraphBuilder {
     }
 
     pub fn add_output(&mut self, output: Output) -> Result<&mut Self> {
-        let id = format!("out{}", self.outputs.len());
         unsafe {
             // Configure the encoder based on the decoder, then initialize it
             let ref input = self.input.input;
@@ -285,22 +283,23 @@ impl GraphBuilder {
             }
 
             // Create and configure the sink filter
-            let buffersink = sys::avfilter_get_by_name(str_conv!("abuffersink"));
+            let buffersink = sys::avfilter_get_by_name(str_conv!("abuffersink\0"));
             ck_null!(buffersink);
-            let buffersink_ctx = sys::avfilter_graph_alloc_filter(self.graph.ptr, buffersink, str_conv!(&id[..]));
+            let id = format!("out{}\0", self.outputs.len());
+            let buffersink_ctx = sys::avfilter_graph_alloc_filter(self.graph.ptr, buffersink, str_conv!(id));
             ck_null!(buffersink_ctx);
 
-            match sys::av_opt_set_bin(buffersink_ctx as *mut c_void, str_conv!("sample_rates"), mem::transmute(&(*output.codec_ctx).sample_rate),
+            match sys::av_opt_set_bin(buffersink_ctx as *mut c_void, str_conv!("sample_rates\0"), mem::transmute(&(*output.codec_ctx).sample_rate),
             mem::size_of_val(&(*output.codec_ctx).sample_rate) as c_int, sys::AV_OPT_SEARCH_CHILDREN) {
                 0 => { }
                 e => return Err(ErrorKind::FFmpeg("failed to configure buffersink sample_rates", e).into()),
             }
-            match sys::av_opt_set_bin(buffersink_ctx as *mut c_void, str_conv!("sample_fmts"), mem::transmute(&(*output.codec_ctx).sample_fmt),
+            match sys::av_opt_set_bin(buffersink_ctx as *mut c_void, str_conv!("sample_fmts\0"), mem::transmute(&(*output.codec_ctx).sample_fmt),
             mem::size_of_val(&(*output.codec_ctx).sample_fmt) as c_int, sys::AV_OPT_SEARCH_CHILDREN) {
                 0 => { }
                 e => return Err(ErrorKind::FFmpeg("failed to configure buffersink sample_fmts", e).into()),
             }
-            match sys::av_opt_set_bin(buffersink_ctx as *mut c_void, str_conv!("channel_layouts"), mem::transmute(&(*output.codec_ctx).channel_layout),
+            match sys::av_opt_set_bin(buffersink_ctx as *mut c_void, str_conv!("channel_layouts\0"), mem::transmute(&(*output.codec_ctx).channel_layout),
             mem::size_of_val(&(*output.codec_ctx).channel_layout) as c_int, sys::AV_OPT_SEARCH_CHILDREN) {
                 0 => { }
                 e => return Err(ErrorKind::FFmpeg("failed to configure buffersink channel_layouts", e).into()),
@@ -320,11 +319,11 @@ impl GraphBuilder {
     pub fn build(self) -> Result<Graph> {
         unsafe {
             // Create the audio split filter and wire it up
-            let asplit = sys::avfilter_get_by_name(str_conv!("asplit"));
+            let asplit = sys::avfilter_get_by_name(str_conv!("asplit\0"));
             ck_null!(asplit);
-            let asplit_ctx = sys::avfilter_graph_alloc_filter(self.graph.ptr, asplit, str_conv!("splitter"));
+            let asplit_ctx = sys::avfilter_graph_alloc_filter(self.graph.ptr, asplit, str_conv!("splitter\0"));
             ck_null!(asplit_ctx);
-            match sys::av_opt_set_int(asplit_ctx as *mut c_void, str_conv!("outputs"), self.outputs.len() as i64, sys::AV_OPT_SEARCH_CHILDREN) {
+            match sys::av_opt_set_int(asplit_ctx as *mut c_void, str_conv!("outputs\0"), self.outputs.len() as i64, sys::AV_OPT_SEARCH_CHILDREN) {
                 0 => { }
                 e => return Err(ErrorKind::FFmpeg("failed to configure asplit", e).into()),
             }
@@ -384,7 +383,8 @@ impl Input {
                 return Err(ErrorKind::Allocation.into());
             }
             (*ps).pb = io_ctx;
-            let format = sys::av_find_input_format(str_conv!(container));
+            let cstr = CString::new(container).unwrap();
+            let format = sys::av_find_input_format(cstr.as_ptr());
             if format.is_null() {
                 bail!("Could not derive format from container!");
             }
@@ -408,7 +408,7 @@ impl Input {
             let codec_ctx = sys::avcodec_alloc_context3(codec);
             ck_null!(codec_ctx);
             let stream = *(*ctx).streams.offset(stream_idx as isize);
-            match sys::av_opt_set_int(codec_ctx as *mut c_void, str_conv!("refcounted_frames"), 1, 0) {
+            match sys::av_opt_set_int(codec_ctx as *mut c_void, str_conv!("refcounted_frames\0"), 1, 0) {
                 0 => { },
                 e => return Err(ErrorKind::FFmpeg("failed to configure codec", e).into()),
             }
@@ -441,12 +441,12 @@ impl Input {
     pub fn metadata(&self) -> Metadata {
         unsafe {
             Metadata {
-                title: self.get_metadata_val("title"),
-                album: self.get_metadata_val("album"),
-                artist: self.get_metadata_val("artist"),
-                genre: self.get_metadata_val("genre"),
-                date: self.get_metadata_val("date"),
-                track: self.get_metadata_val("track"),
+                title: self.get_metadata_val("title\0"),
+                album: self.get_metadata_val("album\0"),
+                artist: self.get_metadata_val("artist\0"),
+                genre: self.get_metadata_val("genre\0"),
+                date: self.get_metadata_val("date\0"),
+                track: self.get_metadata_val("track\0"),
             }
         }
     }
@@ -565,7 +565,8 @@ impl Output {
             ck_null!(io_ctx);
 
             let mut ctx = ptr::null_mut();
-            match sys::avformat_alloc_output_context2(&mut ctx, ptr::null_mut(), str_conv!(container), ptr::null()) {
+            let cstr = CString::new(container).unwrap();
+            match sys::avformat_alloc_output_context2(&mut ctx, ptr::null_mut(), cstr.as_ptr(), ptr::null()) {
                 0 => { },
                 e => return Err(ErrorKind::FFmpeg("failed to open output context", e).into()),
             };
@@ -585,7 +586,7 @@ impl Output {
             (*codec_ctx).sample_fmt = *(*codec).sample_fmts;
             if container == "ogg" {
                 // Set page size to a small duration(0.05s), to minimize skip loss
-                sys::av_opt_set_int((*ctx).priv_data as *mut c_void, str_conv!("page_duration"), 50000, 0);
+                sys::av_opt_set_int((*ctx).priv_data as *mut c_void, str_conv!("page_duration\0"), 50000, 0);
             }
             let stream = sys::avformat_new_stream(ctx, codec);
             ck_null!(stream);
@@ -764,7 +765,6 @@ fn get_error(code: c_int) -> String {
 
 pub fn init() {
     unsafe {
-        sys::av_register_all();
         sys::avfilter_register_all();
     }
 }
@@ -778,7 +778,9 @@ mod tests {
     fn test_instantiate_input() {
         init();
         let f = File::open("test/test.mp3").unwrap();
-        Input::new(f, "mp3").unwrap();
+        if let Err(e) = Input::new(f, "mp3") {
+            panic!("Failure: {}", e);
+        }
     }
 
     #[test]
@@ -807,7 +809,7 @@ mod tests {
         let o2 = Output::new_writer(fout2, "ogg", super::AVCodecID::AV_CODEC_ID_VORBIS, None)?;
         let o3 = Output::new_writer(fout3, "ogg", super::AVCodecID::AV_CODEC_ID_FLAC, None)?;
         let o4 = Output::new_writer(fout4, "mp3", super::AVCodecID::AV_CODEC_ID_MP3, None)?;
-        let o4 = Output::new_writer(fout5, "adts", super::AVCodecID::AV_CODEC_ID_AAC, None)?;
+        let o5 = Output::new_writer(fout5, "adts", super::AVCodecID::AV_CODEC_ID_AAC, None)?;
         let mut gb = GraphBuilder::new(i)?;
         gb.add_output(o1)?;
         gb.add_output(o2)?;
