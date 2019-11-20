@@ -24,7 +24,7 @@ np="http://localhost:8012/api/np"
 # outages), this track will be played.
 fallback="/tmp/in.flac"
 # Length of buffer to maintain in KiB
-buffer_len=32768
+buffer_len=4096
 
 [radio]
 #
