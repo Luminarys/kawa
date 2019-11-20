@@ -8,7 +8,7 @@ pub use sys::AVCodecID;
 use std::ffi::{CString, CStr};
 use std::io::{self, Read, Write};
 use std::{slice, ptr, mem, time};
-use libc::{c_char, c_int, c_void, uint8_t};
+use libc::{c_char, c_int, c_void};
 
 error_chain! {
     errors {
@@ -663,7 +663,7 @@ impl Drop for Output {
     }
 }
 
-unsafe extern fn read_cb<T: Read + Sized>(opaque: *mut c_void, buf: *mut uint8_t, len: c_int) -> c_int {
+unsafe extern fn read_cb<T: Read + Sized>(opaque: *mut c_void, buf: *mut u8, len: c_int) -> c_int {
     let reader = &mut *(opaque as *mut T);
     let s = slice::from_raw_parts_mut(buf, len as usize);
     match reader.read(s) {
@@ -678,7 +678,7 @@ unsafe extern fn read_cb<T: Read + Sized>(opaque: *mut c_void, buf: *mut uint8_t
     }
 }
 
-unsafe extern fn write_cb<T: Sink + Sized>(opaque: *mut c_void, buf: *mut uint8_t, len: c_int) -> c_int {
+unsafe extern fn write_cb<T: Sink + Sized>(opaque: *mut c_void, buf: *mut u8, len: c_int) -> c_int {
     let writer = &mut *(opaque as *mut T);
     let s = slice::from_raw_parts(buf, len as usize);
     match writer.write(s) {

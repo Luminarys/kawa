@@ -10,9 +10,6 @@ use serde_json::Value as JSON;
 use tc_queue;
 use kaeru;
 
-// 256 KiB nuffer
-const INPUT_BUF_LEN: usize = 262144;
-
 pub struct Queue {
     entries: VecDeque<QueueEntry>,
     next: QueueBuffer,
@@ -189,7 +186,8 @@ impl Queue {
 
     fn initiate_transcode<T: io::Read + Send>(&mut self, s: T, container: &str) -> kaeru::Result<Vec<PreBuffer>> {
         let mut prebufs = Vec::new();
-        let input = kaeru::Input::new(BufReader::with_capacity(INPUT_BUF_LEN, s), container)?;
+        let input = kaeru::Input::new(
+            BufReader::with_capacity(self.cfg.queue.buffer_len * 1024, s), container)?;
         let metadata = sync::Arc::new(input.metadata());
         let mut gb = kaeru::GraphBuilder::new(input)?;
         for s in self.cfg.streams.iter() {

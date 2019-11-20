@@ -39,6 +39,7 @@ pub struct QueueConfig {
     pub random: String,
     pub np: String,
     pub fallback: (Arc<Vec<u8>>, String),
+    pub buffer_len: usize,
 }
 
 #[derive(Clone)]
@@ -75,6 +76,7 @@ struct InternalQueueConfig {
     pub random: String,
     pub np: String,
     pub fallback: String,
+    pub buffer_len: usize,
 }
 
 impl InternalConfig {
@@ -131,6 +133,7 @@ impl InternalConfig {
                     random: self.queue.random,
                     np: self.queue.np,
                     fallback: (Arc::new(buffer), fbp.to_owned()),
+                    buffer_len: self.queue.buffer_len,
                },
            })
     }

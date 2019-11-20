@@ -23,6 +23,8 @@ np="http://localhost:8012/api/np"
 # When no tracks are available for whatever reason (such as external service
 # outages), this track will be played.
 fallback="/tmp/in.flac"
+# Length of buffer to maintain in KiB
+buffer_len=32768
 
 [radio]
 #
